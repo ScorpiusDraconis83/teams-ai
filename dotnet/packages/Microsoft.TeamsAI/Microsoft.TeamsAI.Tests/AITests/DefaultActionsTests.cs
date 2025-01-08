@@ -48,7 +48,7 @@ namespace Microsoft.Teams.AI.Tests.AITests
 
             // Assert
             Assert.Equal(AIConstants.StopCommand, result);
-            Assert.Equal(1, logs.Count);
+            Assert.Single(logs);
             Assert.Equal("An AI action named \"test-action\" was predicted but no handler was registered", logs[0]);
         }
 
@@ -68,7 +68,7 @@ namespace Microsoft.Teams.AI.Tests.AITests
 
             // Assert
             Assert.Equal(AIConstants.StopCommand, result);
-            Assert.Equal(1, logs.Count);
+            Assert.Single(logs);
             Assert.Equal("The users input has been moderated but no handler was registered for ___FlaggedInput___", logs[0]);
         }
 
@@ -88,7 +88,7 @@ namespace Microsoft.Teams.AI.Tests.AITests
 
             // Assert
             Assert.Equal(AIConstants.StopCommand, result);
-            Assert.Equal(1, logs.Count);
+            Assert.Single(logs);
             Assert.Equal("The bots output has been moderated but no handler was registered for ___FlaggedOutput___", logs[0]);
         }
 
@@ -171,7 +171,7 @@ namespace Microsoft.Teams.AI.Tests.AITests
             IActionCollection<TurnState> actions = ImportDefaultActions<TurnState>();
             var turnContextMock = new Mock<ITurnContext>();
             turnContextMock.Setup(tc => tc.Activity).Returns(new Activity { Type = ActivityTypes.Message });
-            turnContextMock.Setup(tc => tc.SendActivityAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>())).Returns(Task.FromResult(new ResourceResponse()));
+            turnContextMock.Setup(tc => tc.SendActivityAsync(It.IsAny<Activity>(), It.IsAny<CancellationToken>())).Returns(Task.FromResult(new ResourceResponse()));
             var turnState = new TurnState();
             var command = new PredictedSayCommand("hello");
 
@@ -182,7 +182,7 @@ namespace Microsoft.Teams.AI.Tests.AITests
 
             // Assert
             Assert.Equal(string.Empty, result);
-            turnContextMock.Verify(tc => tc.SendActivityAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+            turnContextMock.Verify(tc => tc.SendActivityAsync(It.IsAny<Activity>(), It.IsAny<CancellationToken>()), Times.Once);
             Assert.NotNull(exception);
             Assert.Equal("Value cannot be null. (Parameter 'command')", exception.Message);
         }

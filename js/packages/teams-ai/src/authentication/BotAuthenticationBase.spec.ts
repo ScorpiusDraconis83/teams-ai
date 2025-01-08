@@ -1,9 +1,9 @@
-/* eslint-disable security/detect-object-injection */
 import assert from 'assert';
 import { TurnState } from '../TurnState';
 import {
     deleteTokenFromState,
     deleteUserInSignInFlow,
+    setSettingNameInContextActivityValue,
     setTokenInState,
     setUserInSignInFlow,
     userInSignInFlow
@@ -89,6 +89,31 @@ describe('BotAuthenticationBase.ts utility functions', () => {
             const response = userInSignInFlow<TurnState>(state);
 
             assert(response == settingName);
+        });
+    });
+
+    describe('setSettingNameInContextActivityValue()', async () => {
+        it('should create an object with the value and assign it to `context.activity.value`', async () => {
+            const [context, _] = await createTurnContextAndState({});
+            const settingName = 'test setting name';
+
+            setSettingNameInContextActivityValue(context, settingName);
+
+            assert(context.activity.value['settingName'] == settingName);
+        });
+
+        it('should assign the value to the `context.activity.value', async () => {
+            const [context, _] = await createTurnContextAndState({
+                value: {
+                    testProperty: 'testValue'
+                }
+            });
+            const settingName = 'test setting name';
+
+            setSettingNameInContextActivityValue(context, settingName);
+
+            assert(context.activity.value['settingName'] == settingName);
+            assert(context.activity.value['testProperty'] == 'testValue');
         });
     });
 

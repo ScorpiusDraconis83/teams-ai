@@ -1,16 +1,12 @@
 # BotFramework Emulator
 
-<small>Getting started directory</small>
+<small>**Navigation**</small>
 
-1. [Migration](./00.MIGRATION.md)
-2. [AI Setup](./01.AI-SETUP.md)
-3. [Activity Routing](./02.ACTIVITY-ROUTING.md)
-4. [QNA](./03.QNA.md)
-5. [Other](../OTHER/TEAMS-TOOLKIT.md)
-   - [**Bot Framework Emulator**](./BOTFRAMEWORK-EMULATOR.md)
-   - [Manual resource setup](./MANUAL-RESOURCE-SETUP.md)
-   - [Teams Toolkit extra information](./TEAMS-TOOLKIT.md)
-   - [Teams Toolkit CLI](./TEAMS-TOOLKIT-CLI.md)
+- [00.OVERVIEW](./README.md)
+- [**Bot Framework Emulator**](./BOTFRAMEWORK-EMULATOR.md)
+- [Manual resource setup](./MANUAL-RESOURCE-SETUP.md)
+- [Teams Toolkit extra information](./TEAMS-TOOLKIT.md)
+- [Teams Toolkit CLI](./TEAMS-TOOLKIT-CLI.md)
 
 [Bot Framework Emulator](https://github.com/microsoft/BotFramework-Emulator) allows testing bots independently from Channels when developing your bot. If you do not wish to use Teams Toolkit, please follow the steps below to test your bot in Emulator.
 
@@ -52,3 +48,13 @@ yarn start
 4. In a new terminal window, run `ngrok http 3978` to start the tunneling service.
 
 For detailed instructions on using the Bot Framework Emulator, see the [Microsoft Learn documentation](https://learn.microsoft.com/azure/bot-service/bot-service-debug-emulator?view=azure-bot-service-4.0)
+
+---
+
+## Return to other major section topics:
+
+- [CONCEPTS](../CONCEPTS/README.md)
+- [MIGRATION](../MIGRATION/README.md)
+- [QUICKSTART](../QUICKSTART.md)
+- [SAMPLES](../SAMPLES.md)
+- [**OTHER**](../OTHER/README.md)

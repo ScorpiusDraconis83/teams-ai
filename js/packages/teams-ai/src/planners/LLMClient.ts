@@ -6,13 +6,21 @@
  * Licensed under the MIT License.
  */
 
-import { ConversationHistory, Message, Prompt, PromptFunctions, PromptTemplate } from '../prompts';
-import { PromptResponse, PromptCompletionModel } from '../models';
-import { Validation, PromptResponseValidator, DefaultResponseValidator } from '../validators';
-import { Memory, MemoryFork } from '../MemoryFork';
-import { Colorize } from '../internals';
 import { TurnContext } from 'botbuilder';
-import { GPT3Tokenizer, Tokenizer } from '../tokenizers';
+
+import { Colorize } from '../internals';
+import { Memory, MemoryFork } from '../MemoryFork';
+import {
+    PromptCompletionModel,
+    PromptCompletionModelBeforeCompletionEvent,
+    PromptCompletionModelChunkReceivedEvent,
+    PromptCompletionModelResponseReceivedEvent
+} from '../models';
+import { ConversationHistory, Message, Prompt, PromptFunctions, PromptTemplate } from '../prompts';
+import { StreamingResponse } from '../StreamingResponse';
+import { GPTTokenizer, Tokenizer } from '../tokenizers';
+import { PromptResponse } from '../types';
+import { Validation, PromptResponseValidator, DefaultResponseValidator } from '../validators';
 
 /**
  * Options for an LLMClient instance.
@@ -63,7 +71,7 @@ export interface LLMClientOptions<TContent = any> {
     /**
      * Optional. Tokenizer to use when rendering the prompt or counting tokens.
      * @remarks
-     * If not specified a new instance of `GPT3Tokenizer` will be created.
+     * If not specified, a new instance of `GPTTokenizer` will be created. GPT3Tokenizer can be passed in for gpt-3 models.
      */
     tokenizer?: Tokenizer;
 
@@ -79,6 +87,26 @@ export interface LLMClientOptions<TContent = any> {
      * Optional. If true, any repair attempts will be logged to the console.
      */
     logRepairs?: boolean;
+
+    /**
+     * Optional message to send a client at the start of a streaming response.
+     */
+    startStreamingMessage?: string;
+
+    /**
+     * Optional handler to run when a stream is about to conclude.
+     */
+    endStreamHandler?: PromptCompletionModelResponseReceivedEvent;
+
+    /**
+     * If true, the feedback loop will be enabled for streaming responses.
+     */
+    enableFeedbackLoop?: boolean;
+
+    /**
+     * The type of the feedback loop.
+     */
+    feedbackLoopType?: 'default' | 'custom';
 }
 
 /**
@@ -180,6 +208,11 @@ export interface ConfiguredLLMClientOptions<TContent = any> {
  * @template TContent Optional. Type of message content returned for a 'success' response. The `response.message.content` field will be of type TContent. Defaults to `any`.
  */
 export class LLMClient<TContent = any> {
+    private readonly _startStreamingMessage: string | undefined;
+    private readonly _endStreamHandler: PromptCompletionModelResponseReceivedEvent | undefined;
+    private readonly _enableFeedbackLoop: boolean | undefined;
+    private readonly _feedbackLoopType: 'default' | 'custom' | undefined;
+
     /**
      * Configured options for this LLMClient instance.
      */
@@ -187,7 +220,7 @@ export class LLMClient<TContent = any> {
 
     /**
      * Creates a new `LLMClient` instance.
-     * @param options Options to configure the instance with.
+     * @param {LLMClientOptions<TContent>} options - Options to configure the instance with.
      */
     public constructor(options: LLMClientOptions<TContent>) {
         this.options = Object.assign(
@@ -208,37 +241,13 @@ export class LLMClient<TContent = any> {
 
         // Create tokenizer to use
         if (!this.options.tokenizer) {
-            this.options.tokenizer = new GPT3Tokenizer();
-        }
-    }
-
-    /**
-     * Adds a result from a `function_call` to the history.
-     * @param memory An interface for accessing state values.
-     * @param name Name of the function that was called.
-     * @param results Results returned by the function.
-     */
-    public addFunctionResultToHistory(memory: Memory, name: string, results: any): void {
-        // Convert content to string
-        let content = '';
-        if (typeof results === 'object') {
-            if (typeof results.toISOString == 'function') {
-                content = results.toISOString();
-            } else {
-                content = JSON.stringify(results);
-            }
-        } else if (results !== undefined && results !== null) {
-            content = results.toString();
+            this.options.tokenizer = new GPTTokenizer();
         }
 
-        // Add result to history
-        const { history_variable } = this.options;
-        const history: Message[] = memory.getValue(history_variable) ?? [];
-        history.push({ role: 'function', name, content });
-        if (history.length > this.options.max_history_messages) {
-            history.splice(0, history.length - this.options.max_history_messages);
-        }
-        memory.setValue(history_variable, history);
+        this._startStreamingMessage = options.startStreamingMessage;
+        this._endStreamHandler = options.endStreamHandler;
+        this._enableFeedbackLoop = options.enableFeedbackLoop;
+        this._feedbackLoopType = options.feedbackLoopType;
     }
 
     /**
@@ -270,12 +279,144 @@ export class LLMClient<TContent = any> {
      * the validator feedback message.  There are other status codes for various errors and in all
      * cases except `success` the `response.message` will be of type `string`.
      * @template TContent Optional. Type of message content returned for a 'success' response. The `response.message.content` field will be of type TContent. Defaults to `any`.
-     * @param context Current turn context.
-     * @param memory An interface for accessing state values.
-     * @param functions Functions to use when rendering the prompt.
-     * @returns A `PromptResponse` with the status and message.
+     * @param {TurnContext} context - Current turn context.
+     * @param {Memory} memory - An interface for accessing state values.
+     * @param {PromptFunctions} functions - Functions to use when rendering the prompt.
+     * @returns {Promise<PromptResponse<TContent>>} A `PromptResponse` with the status and message.
      */
+
     public async completePrompt(
+        context: TurnContext,
+        memory: Memory,
+        functions: PromptFunctions
+    ): Promise<PromptResponse<TContent>> {
+        // Define event handlers
+        let streamer: StreamingResponse | undefined;
+        const beforeCompletion: PromptCompletionModelBeforeCompletionEvent = (
+            ctx,
+            memory,
+            functions,
+            tokenizer,
+            template,
+            streaming
+        ) => {
+            // Ignore events for other contexts
+            if (context !== ctx) {
+                return;
+            }
+
+            // Check for a streaming response
+            if (streaming) {
+                // Attach to any existing streamer
+                // - see tool call note below to understand.
+                streamer = memory.getValue('temp.streamer');
+                if (!streamer) {
+                    // Create streamer and send initial message
+                    streamer = new StreamingResponse(context);
+                    memory.setValue('temp.streamer', streamer);
+
+                    if (this._enableFeedbackLoop != null) {
+                        streamer.setFeedbackLoop(this._enableFeedbackLoop);
+                        if (this._feedbackLoopType) {
+                            streamer.setFeedbackLoopType(this._feedbackLoopType);
+                        }
+                    }
+
+                    streamer.setGeneratedByAILabel(true);
+
+                    if (this._startStreamingMessage) {
+                        streamer.queueInformativeUpdate(this._startStreamingMessage);
+                    }
+                }
+            }
+        };
+
+        const chunkReceived: PromptCompletionModelChunkReceivedEvent = (ctx, memory, chunk) => {
+            // Ignore events for other contexts
+            if (context !== ctx || !streamer) {
+                return;
+            }
+
+            const citations = chunk.delta?.context?.citations ?? undefined;
+
+            if (citations) {
+                streamer.setCitations(citations);
+            }
+
+            // Ignore calls without content
+            // - This is typically because the chunk represents a tool call.
+            // - See the note below for why we're handling tool calls this way.
+            if (!chunk.delta?.content) {
+                return;
+            }
+
+            // Send text chunk to client
+            const text = chunk.delta?.content;
+
+            if (text.length > 0) {
+                streamer.queueTextChunk(text);
+            }
+        };
+
+        // Subscribe to model events
+        if (this.options.model.events) {
+            this.options.model.events.on('beforeCompletion', beforeCompletion);
+            this.options.model.events.on('chunkReceived', chunkReceived);
+
+            if (this._endStreamHandler) {
+                this.options.model.events.on('responseReceived', this._endStreamHandler);
+            }
+        }
+
+        try {
+            // Complete the prompt
+            const response = await this.callCompletePrompt(context, memory, functions);
+
+            // Handle streaming responses
+            if (streamer) {
+                // Tool call handling
+                // - We need to keep the streamer around during tool calls so we're just letting them return as normal
+                //   messages minus the message content. The text content is being streamed to the client in chunks.
+                // - When the tool call completes we'll call back into ActionPlanner and end up re-attaching to the
+                //   streamer. This will result in us continuing to stream the response to the client.
+                if (Array.isArray(response.message?.action_calls)) {
+                    // Ensure content is empty for tool calls
+                    response.message!.content = '' as TContent;
+                } else {
+                    if (response.status == 'success') {
+                        // Delete message from response to avoid sending it twice
+                        delete response.message;
+                    }
+
+                    // End the stream and remove pointer from memory
+                    // - We're not listening for the response received event because we can't await the completion of events.
+                    await streamer.endStream();
+                    memory.deleteValue('temp.streamer');
+                }
+            }
+
+            return response;
+        } finally {
+            // Unsubscribe from model events
+            if (this.options.model.events) {
+                this.options.model.events.off('beforeCompletion', beforeCompletion);
+                this.options.model.events.off('chunkReceived', chunkReceived);
+
+                if (this._endStreamHandler) {
+                    this.options.model.events.off('responseReceived', this._endStreamHandler);
+                }
+            }
+        }
+    }
+
+    /**
+     * @param {TurnContext} context - Current turn context.
+     * @param {Memory} memory - An interface for accessing state values.
+     * @param {PromptFunctions} functions - Functions to use when rendering the prompt.
+     * @returns {Promise<PromptResponse<TContent>>} A `PromptResponse` with the status and message.
+     * @private
+     */
+    public async callCompletePrompt(
         context: TurnContext,
         memory: Memory,
         functions: PromptFunctions
@@ -292,6 +433,7 @@ export class LLMClient<TContent = any> {
                 tokenizer,
                 template
             )) as PromptResponse<TContent>;
+
             if (response.status !== 'success') {
                 // The response isn't valid so we don't care that the messages type is potentially incorrect.
                 return response;
@@ -314,13 +456,13 @@ export class LLMClient<TContent = any> {
             );
             if (validation.valid) {
                 // Update content
-                if (validation.hasOwnProperty('value')) {
+                if (Object.prototype.hasOwnProperty.call(validation, 'value')) {
                     response.message!.content = validation.value;
                 }
 
                 // Update history and return
-                this.addInputToHistory(memory, history_variable, inputMsg!);
-                this.addResponseToHistory(memory, history_variable, response.message!);
+                this.addMessageToHistory(memory, history_variable, inputMsg!);
+                this.addMessageToHistory(memory, history_variable, response.message!);
                 return response;
             }
 
@@ -362,8 +504,8 @@ export class LLMClient<TContent = any> {
             // - we never want to save an invalid response to conversation history.
             // - the caller can take further corrective action, including simply re-trying.
             if (repair.status === 'success') {
-                this.addInputToHistory(memory, history_variable, inputMsg!);
-                this.addResponseToHistory(memory, history_variable, repair.message!);
+                this.addMessageToHistory(memory, history_variable, inputMsg!);
+                this.addMessageToHistory(memory, history_variable, repair.message!);
             }
 
             return repair;
@@ -377,46 +519,41 @@ export class LLMClient<TContent = any> {
     }
 
     /**
-     * @param memory
-     * @param variable
-     * @param input
+     * @param {Memory} memory - Current memory.
+     * @param {string} variable - Variable to fetch value from memory.
+     * @param {Message<any> | Message<any>[]} message - The Message to be added to history.
      * @private
      */
-    private addInputToHistory(memory: Memory, variable: string, input: Message<any>): void {
+    private addMessageToHistory(memory: Memory, variable: string, message: Message<any> | Message<any>[]): void {
         if (variable) {
             const history: Message[] = memory.getValue(variable) ?? [];
-            history.push(input);
+
+            if (Array.isArray(message)) {
+                history.push(...message);
+            } else {
+                history.push(message);
+            }
+
             if (history.length > this.options.max_history_messages) {
                 history.splice(0, history.length - this.options.max_history_messages);
             }
+
+            while (history.length > 0 && history[0].role === 'tool') {
+                history.shift();
+            }
+
             memory.setValue(variable, history);
         }
     }
 
     /**
-     * @param memory
-     * @param variable
-     * @param message
-     * @private
-     */
-    private addResponseToHistory(memory: Memory, variable: string, message: Message<TContent>): void {
-        if (variable) {
-            const history: Message<TContent>[] = memory.getValue(variable) ?? [];
-            history.push(message);
-            if (history.length > this.options.max_history_messages) {
-                history.splice(0, history.length - this.options.max_history_messages);
-            }
-            memory.setValue(variable, history);
-        }
-    }
-
-    /**
-     * @param context
-     * @param fork
-     * @param functions
-     * @param response
-     * @param validation
-     * @param remaining_attempts
+     * @param {TurnContext} context - The current TurnContext
+     * @param {MemoryFork} fork - The current fork of memory to be repaired.
+     * @param {PromptFunctions} functions - Functions to use.
+     * @param {PromptResponse<TContent>} response - The response that needs repairing.
+     * @param {Validation} validation - The Validation object to be used during repair.
+     * @param {number} remaining_attempts - The number of remaining attempts.
+     * @returns {Promise<PromptResponse<TContent>>} - The repaired response.
      * @private
      */
     private async repairResponse(
@@ -431,8 +568,8 @@ export class LLMClient<TContent = any> {
 
         // Add response and feedback to repair history
         const feedback = validation.feedback ?? 'The response was invalid. Try another strategy.';
-        this.addResponseToHistory(fork, `${history_variable}-repair`, response.message!);
-        this.addInputToHistory(fork, `${history_variable}-repair`, { role: 'user', content: feedback });
+        this.addMessageToHistory(fork, `${history_variable}-repair`, response.message!);
+        this.addMessageToHistory(fork, `${history_variable}-repair`, { role: 'user', content: feedback });
 
         // Append repair history to prompt
         const repairTemplate = Object.assign({}, template, {
@@ -466,7 +603,7 @@ export class LLMClient<TContent = any> {
         );
         if (validation.valid) {
             // Update content
-            if (validation.hasOwnProperty('value')) {
+            if (Object.prototype.hasOwnProperty.call(validation, 'value')) {
                 repairResponse.message!.content = validation.value;
             }
 
@@ -479,7 +616,9 @@ export class LLMClient<TContent = any> {
             return {
                 status: 'invalid_response',
                 input: undefined,
-                error: new Error(validation.feedback ?? 'The response was invalid. Try another strategy.')
+                error: new Error(
+                    `Reached max model response repair attempts. Last feedback given to model: "${feedback}"`
+                )
             };
         }
 

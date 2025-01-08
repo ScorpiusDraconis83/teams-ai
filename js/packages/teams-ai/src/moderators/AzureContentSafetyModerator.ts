@@ -1,6 +1,3 @@
-// TODO: Remove these lines once the linting issues are resolved:
-/* eslint-disable jsdoc/require-returns */
-/* eslint-disable security/detect-object-injection */
 /**
  * @module teams-ai
  */
@@ -18,7 +15,6 @@ import {
     AzureOpenAIModeratorCategory,
     CreateContentSafetyResponse,
     OpenAIClientResponse,
-    ModerationResponse,
     CreateContentSafetyRequest,
     ContentSafetyHarmCategory,
     ContentSafetyOptions,
@@ -47,11 +43,21 @@ export interface AzureOpenAIModeratorOptions extends OpenAIModeratorOptions {
     blocklistNames?: string[];
 
     /**
+     * @deprecated
+     * use `haltOnBlocklistHit`
+     *
      * When set to true, further analyses of harmful content will not be performed in cases where blocklists are hit.
      * When set to false, all analyses of harmful content will be performed, whether or not blocklists are hit.
      * Default value is false.
      */
     breakByBlocklists?: boolean;
+
+    /**
+     * When set to true, further analyses of harmful content will not be performed in cases where blocklists are hit.
+     * When set to false, all analyses of harmful content will be performed, whether or not blocklists are hit.
+     * Default value is false.
+     */
+    haltOnBlocklistHit?: boolean;
 }
 
 const defaultHarmCategories: AzureOpenAIModeratorCategory[] = ['Hate', 'Sexual', 'SelfHarm', 'Violence'];
@@ -77,7 +83,9 @@ export class AzureContentSafetyModerator<TState extends TurnState = TurnState> e
             apiKey: options.apiKey,
             moderate: options.moderate ?? 'both',
             endpoint: options.endpoint,
-            apiVersion: options.apiVersion
+            apiVersion: options.apiVersion,
+            organization: options.organization,
+            model: options.model
         };
         super(moderatorOptions);
 
@@ -114,7 +122,7 @@ export class AzureContentSafetyModerator<TState extends TurnState = TurnState> e
         this._contentSafetyOptions = {
             categories: categories ?? defaultHarmCategories,
             blocklistNames: options.blocklistNames ?? [],
-            breakByBlocklists: options.breakByBlocklists ?? false
+            haltOnBlocklistHit: options.haltOnBlocklistHit ?? options.breakByBlocklists ?? false
         };
     }
 
@@ -128,7 +136,7 @@ export class AzureContentSafetyModerator<TState extends TurnState = TurnState> e
         return new AzureOpenAIClient({
             apiKey: options.apiKey,
             endpoint: options.endpoint!,
-            apiVersion: options.apiVersion ?? '2023-04-30-preview',
+            apiVersion: options.apiVersion ?? '2023-10-01',
             headerKey: 'Ocp-Apim-Subscription-Key'
         });
     }
@@ -141,49 +149,51 @@ export class AzureContentSafetyModerator<TState extends TurnState = TurnState> e
      * @template TState Optional. Type of the applications turn state.
      */
     protected async createModeration(input: string): Promise<CreateModerationResponseResultsInner | undefined> {
-        const response = (await this._azureContentSafetyClient.createModeration({
+        const res = (await this._azureContentSafetyClient.createModeration({
             text: input,
             ...this._contentSafetyOptions
-        } as CreateContentSafetyRequest)) as OpenAIClientResponse<ModerationResponse>;
-        const data = response.data as CreateContentSafetyResponse;
-        if (!data) {
+        } as CreateContentSafetyRequest)) as OpenAIClientResponse<CreateContentSafetyResponse>;
+
+        if (!res.data) {
             return undefined;
         }
-        // Check if the input is safe for each category
-        const hateResult: boolean =
-            data.hateResult?.severity > 0 &&
-            data.hateResult.severity <= this._azureContentSafetyCategories.Hate.severity;
-        const selfHarmResult: boolean =
-            data.selfHarmResult?.severity > 0 &&
-            data.selfHarmResult.severity <= this._azureContentSafetyCategories.SelfHarm.severity;
-        const sexualResult: boolean =
-            data.sexualResult?.severity > 0 &&
-            data.sexualResult.severity <= this._azureContentSafetyCategories.Sexual.severity;
-        const violenceResult: boolean =
-            data.violenceResult?.severity > 0 &&
-            data.violenceResult.severity <= this._azureContentSafetyCategories.Violence.severity;
+
+        const predicate = (category: AzureOpenAIModeratorCategory) => {
+            return (c: ContentSafetyHarmCategory) => {
+                return (
+                    c.category === category &&
+                    c.severity > 0 &&
+                    c.severity <= this._azureContentSafetyCategories[category].severity
+                );
+            };
+        };
+
+        const hate = res.data.categoriesAnalysis.find(predicate('Hate'));
+        const selfHarm = res.data.categoriesAnalysis.find(predicate('SelfHarm'));
+        const sexual = res.data.categoriesAnalysis.find(predicate('Sexual'));
+        const violence = res.data.categoriesAnalysis.find(predicate('Violence'));
 
         // Create the moderation results
         const result: CreateModerationResponseResultsInner = {
-            flagged: hateResult || selfHarmResult || sexualResult || violenceResult,
+            flagged: !!hate || !!selfHarm || !!sexual || !!violence,
             categories: {
-                hate: hateResult,
-                'hate/threatening': hateResult,
-                'self-harm': selfHarmResult,
-                sexual: sexualResult,
-                'sexual/minors': sexualResult,
-                violence: violenceResult,
-                'violence/graphic': violenceResult
+                hate: !!hate,
+                'hate/threatening': !!hate,
+                'self-harm': !!selfHarm,
+                sexual: !!sexual,
+                'sexual/minors': !!sexual,
+                violence: !!violence,
+                'violence/graphic': !!violence
             },
             category_scores: {
                 // Normalize the scores to be between 0 and 1
-                hate: (data.hateResult?.severity ?? 0) / ModerationSeverity.High,
-                'hate/threatening': (data.hateResult?.severity ?? 0) / ModerationSeverity.High,
-                'self-harm': (data.selfHarmResult?.severity ?? 0) / ModerationSeverity.High,
-                sexual: (data.sexualResult?.severity ?? 0) / ModerationSeverity.High,
-                'sexual/minors': (data.sexualResult?.severity ?? 0) / ModerationSeverity.High,
-                violence: (data.violenceResult?.severity ?? 0) / ModerationSeverity.High,
-                'violence/graphic': (data.violenceResult?.severity ?? 0) / ModerationSeverity.High
+                hate: (hate?.severity ?? 0) / ModerationSeverity.High,
+                'hate/threatening': (hate?.severity ?? 0) / ModerationSeverity.High,
+                'self-harm': (selfHarm?.severity ?? 0) / ModerationSeverity.High,
+                sexual: (sexual?.severity ?? 0) / ModerationSeverity.High,
+                'sexual/minors': (sexual?.severity ?? 0) / ModerationSeverity.High,
+                violence: (violence?.severity ?? 0) / ModerationSeverity.High,
+                'violence/graphic': (violence?.severity ?? 0) / ModerationSeverity.High
             }
         };
         return result;
@@ -191,11 +201,9 @@ export class AzureContentSafetyModerator<TState extends TurnState = TurnState> e
 
     /**
      * Reviews an incoming prompt for safety violations.
-     * @param context Context for the current turn of conversation.
-     * @param state Application state for the current turn of conversation.
-     * @param prompt Generated prompt to be reviewed.
-     * @param options Current options for the AI system.
-     * @returns An undefined value to approve the prompt or a new plan to redirect to if not approved.
+     * @param {TurnContext} context - Context for the current turn of conversation.
+     * @param {TState} state - Application state for the current turn of conversation.
+     * @returns {Promise<Plan | undefined>} An undefined value to approve the prompt or a new plan to redirect to if not approved.
      */
     public override async reviewInput(context: TurnContext, state: TState): Promise<Plan | undefined> {
         switch (this.options.moderate) {
@@ -233,10 +241,10 @@ export class AzureContentSafetyModerator<TState extends TurnState = TurnState> e
 
     /**
      * Reviews the SAY commands generated by the planner for safety violations.
-     * @param context Context for the current turn of conversation.
-     * @param state Application state for the current turn of conversation.
-     * @param plan Plan generated by the planner.
-     * @returns The plan to execute. Either the current plan passed in for review or a new plan.
+     * @param {TurnContext} context - Context for the current turn of conversation.
+     * @param {TState} state - Application state for the current turn of conversation.
+     * @param {Plan} plan - Plan generated by the planner.
+     * @returns {Promise<Plan>} The plan to execute. Either the current plan passed in for review or a new plan.
      */
     public async reviewOutput(context: TurnContext, state: TState, plan: Plan): Promise<Plan> {
         switch (this.options.moderate) {
@@ -247,7 +255,7 @@ export class AzureContentSafetyModerator<TState extends TurnState = TurnState> e
                     if (cmd.type == 'SAY') {
                         const predictedSayCommand = cmd as PredictedSayCommand;
                         const output = predictedSayCommand.response;
-                        const result = await this.createModeration(output);
+                        const result = await this.createModeration(output.content || '');
                         if (result) {
                             if (result.flagged) {
                                 // Output flagged

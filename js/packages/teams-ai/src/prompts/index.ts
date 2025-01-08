@@ -6,6 +6,7 @@
  * Licensed under the MIT License.
  */
 
+export * from './ActionOutputMessage';
 export * from './AssistantMessage';
 export * from './DataSourceSection';
 export * from './ConversationHistory';
@@ -22,7 +23,6 @@ export * from './PromptSectionBase';
 export * from './PromptTemplate';
 export * from './SystemMessage';
 export * from './TemplateSection';
-export * from './TestPromptManager';
 export * from './TextSection';
 export * from './UserInputMessage';
 export * from './UserMessage';

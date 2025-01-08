@@ -1,14 +1,14 @@
 import { strict as assert } from 'assert';
-import { TextSection } from './TextSection';
 import { TestAdapter } from 'botbuilder';
-import { TestPromptManager } from './TestPromptManager';
-import { GPT3Tokenizer } from '../tokenizers';
-import { TestTurnState } from '../TestTurnState';
+import { TestPromptManager } from '../internals/testing/TestPromptManager';
+import { TestTurnState } from '../internals/testing/TestTurnState';
+import { GPTTokenizer } from '../tokenizers';
+import { TextSection } from './TextSection';
 
 describe('TextSection', () => {
     const adapter = new TestAdapter();
     const functions = new TestPromptManager();
-    const tokenizer = new GPT3Tokenizer();
+    const tokenizer = new GPTTokenizer();
 
     describe('constructor', () => {
         it('should create a TextSection', () => {

@@ -6,15 +6,105 @@
  * Licensed under the MIT License.
  */
 
+import EventEmitter from 'events';
+
 import { TurnContext } from 'botbuilder-core';
 import { Message, PromptFunctions, PromptTemplate } from '../prompts';
 import { Tokenizer } from '../tokenizers';
+import { PromptResponse } from '../types';
 import { Memory } from '../MemoryFork';
+import StrictEventEmitter from '../external/strict-event-emitter-types';
+import { StreamingResponse } from '../StreamingResponse';
+
+/**
+ * Events emitted by a PromptCompletionModel.
+ */
+export interface PromptCompletionModelEvents {
+    /**
+     * Triggered before the model is called to complete a prompt.
+     * @param context Current turn context.
+     * @param memory An interface for accessing state values.
+     * @param functions Functions to use when rendering the prompt.
+     * @param tokenizer Tokenizer to use when rendering the prompt.
+     * @param template Prompt template being completed.
+     * @param streaming `true` if the prompts response is being streamed.
+     */
+    beforeCompletion: (
+        context: TurnContext,
+        memory: Memory,
+        functions: PromptFunctions,
+        tokenizer: Tokenizer,
+        template: PromptTemplate,
+        streaming: boolean
+    ) => void;
+
+    /**
+     * Triggered when a chunk is received from the model via streaming.
+     * @param context Current turn context.
+     * @param memory An interface for accessing state values.
+     * @param chunk Message delta received from the model.
+     */
+    chunkReceived: (context: TurnContext, memory: Memory, chunk: PromptChunk) => void;
+
+    /**
+     * Triggered after the model finishes returning a response.
+     * @param context Current turn context.
+     * @param memory An interface for accessing state values.
+     * @param response Final response returned by the model.
+     */
+    responseReceived: (
+        context: TurnContext,
+        memory: Memory,
+        response: PromptResponse<string>,
+        streamer: StreamingResponse
+    ) => void;
+}
+
+/**
+ * Type signature for the `beforeCompletion` event of a `PromptCompletionModel`.
+ */
+export type PromptCompletionModelBeforeCompletionEvent = (
+    context: TurnContext,
+    memory: Memory,
+    functions: PromptFunctions,
+    tokenizer: Tokenizer,
+    template: PromptTemplate,
+    streaming: boolean
+) => void;
+
+/**
+ * Type signature for the `chunkReceived` event of a `PromptCompletionModel`.
+ */
+export type PromptCompletionModelChunkReceivedEvent = (
+    context: TurnContext,
+    memory: Memory,
+    chunk: PromptChunk
+) => void;
+
+/**
+ * Type signature for the `responseReceived` event of a `PromptCompletionModel`.
+ */
+export type PromptCompletionModelResponseReceivedEvent = (
+    context: TurnContext,
+    memory: Memory,
+    response: PromptResponse<string>,
+    streamer: StreamingResponse
+) => void;
+
+/**
+ * Helper type that strongly types the the EventEmitter for a PromptCOmpletionModel instance.
+ */
+export type PromptCompletionModelEmitter = StrictEventEmitter<EventEmitter, PromptCompletionModelEvents>;
 
 /**
  * An AI model that can be used to complete prompts.
  */
 export interface PromptCompletionModel {
+    /**
+     * Optional. Events emitted by the model.
+     */
+    readonly events?: PromptCompletionModelEmitter;
+
     /**
      * Completes a prompt.
      * @param context Current turn context.
@@ -34,40 +124,11 @@ export interface PromptCompletionModel {
 }
 
 /**
- * Status of the prompt response.
- * @remarks
- * `success` - The prompt was successfully completed.
- * `error` - An error occurred while completing the prompt.
- * `rate_limited` - The request was rate limited.
- * `invalid_response` - The response was invalid.
- * `too_long` - The rendered prompt exceeded the `max_input_tokens` limit.
+ * Streaming chunk passed in the `sendChunk` event of a `PromptCompletionClient`.
  */
-export type PromptResponseStatus = 'success' | 'error' | 'rate_limited' | 'invalid_response' | 'too_long';
-
-/**
- * Response returned by a `PromptCompletionClient`.
- * @template TContent Optional. Type of the content in the message. Defaults to `unknown`.
- */
-export interface PromptResponse<TContent = unknown> {
+export interface PromptChunk {
     /**
-     * Status of the prompt response.
+     * Delta for the response message being buffered up.
      */
-    status: PromptResponseStatus;
-
-    /**
-     * User input message sent to the model. `undefined` if no input was sent.
-     */
-    input?: Message<any>;
-
-    /**
-     * Message returned.
-     * @remarks
-     * This will be a `Message<TContent>` object if the status is `success`, otherwise it will be a `string`.
-     */
-    message?: Message<TContent>;
-
-    /**
-     * Error returned.
-     */
-    error?: Error;
+    delta?: Partial<Message<string>>;
 }

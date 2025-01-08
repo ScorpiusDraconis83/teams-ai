@@ -3,11 +3,12 @@
     "include": ["packages/**/src/**/*.ts", "lib/**/*.js"],
     "exclude": [
         "**/node_modules/**",
-        "**/tests/**",
+        "**/testing/**",
         "**/coverage/**",
         "**/*.d.ts",
         "**/*.spec.ts",
-        "packages/**/src/**/index.ts"
+        "packages/**/src/**/index.ts",
+        "packages/teams-ai/src/internals/Colorize.ts"
     ],
     "reporter": ["html", "text", "lcov"],
     "all": true,

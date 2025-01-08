@@ -14,7 +14,7 @@ namespace Microsoft.Teams.AI.AI
     /// </summary>
     /// <remarks>
     /// The AI system is responsible for generating plans, moderating input and output, and
-    /// generating prompts. It can be used free standing or routed to by the Application object.
+    /// generating prompts. It can be used free standing or routed to by the <see cref="Application{TState}"/> object.
     /// </remarks>
     /// <typeparam name="TState">Optional. Type of the turn state.</typeparam>
     public class AI<TState> where TState : TurnState
@@ -36,11 +36,12 @@ namespace Microsoft.Teams.AI.AI
                 MaxSteps = options.MaxSteps ?? 25,
                 MaxTime = options.MaxTime ?? TimeSpan.FromMilliseconds(300000),
                 AllowLooping = options.AllowLooping ?? true,
+                EnableFeedbackLoop = options.EnableFeedbackLoop,
             };
             _actions = new ActionCollection<TState>();
 
             // Import default actions
-            ImportActions(new DefaultActions<TState>(loggerFactory));
+            ImportActions(new DefaultActions<TState>(options.EnableFeedbackLoop, loggerFactory));
         }
 
         /// <summary>
@@ -65,7 +66,7 @@ namespace Microsoft.Teams.AI.AI
         /// Registers a handler for a named action.
         /// </summary>
         /// <remarks>
-        /// The AI systems planner returns plans that are made up of a series of commands or actions
+        /// The AI system's planner returns plans that are made up of a series of commands or actions
         /// that should be performed. Registering a handler lets you provide code that should be run in
         /// response to one of the predicted actions.
         /// 
@@ -112,7 +113,7 @@ namespace Microsoft.Teams.AI.AI
         /// Registers the default handler for a named action.
         /// </summary>
         /// <remarks>
-        /// Default handlers can be replaced by calling the RegisterAction() method with the same name.
+        /// Default handlers can be replaced by calling the <see cref="RegisterAction(string, IActionHandler{TState})"/> method with the same name.
         /// </remarks>
         /// <param name="name">The name of the action.</param>
         /// <param name="handler">The action handler function.</param>
@@ -138,7 +139,7 @@ namespace Microsoft.Teams.AI.AI
 
         /// <summary>
         /// Import a set of Actions from the given class instance. The functions must have the `Action` attribute.
-        /// Once these functions are imported, the AI module will have access to these functions.
+        /// Once these functions are imported, the AI System will have access to these functions.
         /// </summary>
         /// <param name="instance">Instance of a class containing these functions.</param>
         /// <returns>The current instance object.</returns>
@@ -209,10 +210,6 @@ namespace Microsoft.Teams.AI.AI
 
             // Initialize start time
             startTime = startTime ?? DateTime.UtcNow;
-
-            // Populate {{$temp.input}}
-            _SetTempStateValues(turnState, turnContext);
-
             Plan? plan = null;
 
             // Review input on first loop
@@ -262,8 +259,10 @@ namespace Microsoft.Teams.AI.AI
                 }
 
                 string output;
-                if (command is PredictedDoCommand doCommand)
+                PredictedDoCommand? doCommand = null;
+                if (command is PredictedDoCommand)
                 {
+                    doCommand = (PredictedDoCommand)command;
                     if (_actions.ContainsAction(doCommand.Action))
                     {
                         DoCommandActionData<TState> data = new()
@@ -276,10 +275,15 @@ namespace Microsoft.Teams.AI.AI
                         output = await this._actions[AIConstants.DoCommandActionName]
                             .Handler
                             .PerformActionAsync(turnContext, turnState, data, doCommand.Action, cancellationToken);
-                        shouldLoop = output.Length > 0;
 
-                        if (turnState.Temp != null)
+                        if (doCommand.ActionId != null)
                         {
+                            shouldLoop = true;
+                            turnState.Temp.ActionOutputs[doCommand.ActionId] = output;
+                        }
+                        else
+                        {
+                            shouldLoop = output.Length > 0;
                             turnState.Temp.ActionOutputs[doCommand.Action] = output;
                         }
                     }
@@ -311,7 +315,16 @@ namespace Microsoft.Teams.AI.AI
                 }
 
                 // Copy the actions output to the input
-                turnState.Temp!.Input = output;
+                turnState.Temp.InputFiles = new();
+
+                if (doCommand != null && doCommand.ActionId != null)
+                {
+                    turnState.DeleteValue("temp.input");
+                }
+                else
+                {
+                    turnState.Temp!.Input = output;
+                }
             }
 
             // Check for looping

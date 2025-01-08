@@ -40,6 +40,11 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.MessageExtensions
             }
             return Task.FromResult(_tokenExchangeResponse);
         }
+
+        public override bool IsSsoSignIn(ITurnContext context)
+        {
+            return context.Activity.Name == MessageExtensionsInvokeNames.QUERY_INVOKE_NAME;
+        }
     }
 
     internal sealed class TokenExchangeRequest
@@ -55,7 +60,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.MessageExtensions
     public class MessageExtensionsAuthenticationBaseTests
     {
         [Fact]
-        public async void Test_Authenticate_TokenExchange_Success()
+        public async Task Test_Authenticate_TokenExchange_Success()
         {
             // arrange
             var meAuth = new MockedMessageExtensionsAuthentication(tokenExchangeResponse: new TokenResponse(token: "test token"));
@@ -76,7 +81,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.MessageExtensions
         }
 
         [Fact]
-        public async void Test_Authenticate_TokenExchange_Fail()
+        public async Task Test_Authenticate_TokenExchange_Fail()
         {
             // arrange
             var meAuth = new MockedMessageExtensionsAuthentication();
@@ -99,7 +104,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.MessageExtensions
             var token = await meAuth.AuthenticateAsync(context);
 
             // assert
-            Assert.Equal(null, token);
+            Assert.Null(token);
             Assert.NotNull(activities);
             var sentActivity = activities.FirstOrDefault();
             Assert.NotNull(sentActivity);
@@ -108,7 +113,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.MessageExtensions
         }
 
         [Fact]
-        public async void Test_Authenticate_UserSignIn_Success()
+        public async Task Test_Authenticate_UserSignIn_Success()
         {
             // arrange
             var meAuth = new MockedMessageExtensionsAuthentication(signInResponse: new TokenResponse(token: "test token"));
@@ -123,7 +128,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.MessageExtensions
         }
 
         [Fact]
-        public async void Test_Authenticate_TriggerSignin()
+        public async Task Test_Authenticate_TriggerSignin()
         {
             // arrange
             var meAuth = new MockedMessageExtensionsAuthentication();
@@ -140,7 +145,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.MessageExtensions
             var token = await meAuth.AuthenticateAsync(context);
 
             // assert
-            Assert.Equal(null, token);
+            Assert.Null(token);
             Assert.NotNull(activities);
             var sentActivity = activities.FirstOrDefault();
             Assert.NotNull(sentActivity);

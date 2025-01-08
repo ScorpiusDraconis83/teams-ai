@@ -1,15 +1,18 @@
 import { strict as assert } from 'assert';
-import { MonologueAugmentation } from './MonologueAugmentation';
 import { TestAdapter } from 'botbuilder';
-import { GPT3Tokenizer } from '../tokenizers';
-import { TestTurnState } from '../TestTurnState';
-import { ChatCompletionAction, PromptResponse } from '../models';
-import { TestPromptManager } from '../prompts';
+
+import { TestPromptManager } from '../internals/testing/TestPromptManager';
+import { TestTurnState } from '../internals/testing/TestTurnState';
+import { ChatCompletionAction } from '../models';
+import { GPTTokenizer } from '../tokenizers';
+import { PromptResponse } from '../types';
+
+import { MonologueAugmentation } from './MonologueAugmentation';
 
 describe('MonologueAugmentation', () => {
     const adapter = new TestAdapter();
     const functions = new TestPromptManager();
-    const tokenizer = new GPT3Tokenizer();
+    const tokenizer = new GPTTokenizer();
     const actions: ChatCompletionAction[] = [
         {
             name: 'test',
@@ -180,7 +183,10 @@ describe('MonologueAugmentation', () => {
                     commands: [
                         {
                             type: 'SAY',
-                            response: 'hello world'
+                            response: {
+                                role: 'assistant',
+                                content: 'hello world'
+                            }
                         }
                     ]
                 });

@@ -6,32 +6,33 @@
  * Licensed under the MIT License.
  */
 
-import axios, { AxiosInstance, AxiosResponse, AxiosRequestConfig } from 'axios';
-import { Message, PromptFunctions, PromptTemplate } from '../prompts';
-import { PromptCompletionModel, PromptResponse } from './PromptCompletionModel';
-import {
-    ChatCompletionRequestMessage,
-    Colorize,
-    CreateChatCompletionRequest,
-    CreateChatCompletionResponse,
-    CreateCompletionRequest,
-    CreateCompletionResponse,
-    OpenAICreateChatCompletionRequest,
-    OpenAICreateCompletionRequest
-} from '../internals';
-import { Tokenizer } from '../tokenizers';
+import { AxiosRequestConfig } from 'axios';
 import { TurnContext } from 'botbuilder';
+import EventEmitter from 'events';
+import { ClientOptions, AzureOpenAI, OpenAI } from 'openai';
+import {
+    type ChatCompletionCreateParams,
+    ChatCompletionMessageParam,
+    ChatCompletionChunk,
+    ChatCompletion,
+    ChatCompletionTool,
+    type ChatCompletionMessageToolCall
+} from 'openai/resources';
+import { Stream } from 'openai/streaming';
+
+import { Colorize } from '../internals';
 import { Memory } from '../MemoryFork';
+import { Message, PromptFunctions, PromptTemplate } from '../prompts';
+import { Tokenizer } from '../tokenizers';
+import { ActionCall, PromptResponse } from '../types';
+
+import { PromptCompletionModel, PromptCompletionModelEmitter } from './PromptCompletionModel';
+import { StreamingResponse } from '../StreamingResponse';
 
 /**
  * Base model options common to both OpenAI and Azure OpenAI services.
  */
 export interface BaseOpenAIModelOptions {
-    /**
-     * Optional. Type of completion to use for the default model. Defaults to 'chat'.
-     */
-    completion_type?: 'chat' | 'text';
-
     /**
      * Optional. Whether to log requests to the console.
      * @remarks
@@ -40,17 +41,46 @@ export interface BaseOpenAIModelOptions {
     logRequests?: boolean;
 
     /**
+     * Optional. Forces the model return a specific response format.
+     * @remarks
+     * This can be used to force the model to always return a valid JSON object.
+     */
+    responseFormat?: { type: 'json_object' };
+
+    /**
+     * @deprecated
      * Optional. Retry policy to use when calling the OpenAI API.
      * @remarks
-     * The default retry policy is `[2000, 5000]` which means that the first retry will be after
-     * 2 seconds and the second retry will be after 5 seconds.
+     * Use `maxRetries` instead.
      */
     retryPolicy?: number[];
 
     /**
+     * Optional. Maximum number of retries to use when calling the OpenAI API.
+     * @remarks
+     * The default is to retry twice.
+     */
+    maxRetries?: number;
+
+    /**
+     * @deprecated
      * Optional. Request options to use when calling the OpenAI API.
+     * @abstract
+     * Use `clientOptions` instead.
      */
     requestConfig?: AxiosRequestConfig;
+
+    /**
+     * Optional. Custom client options to use when calling the OpenAI API.
+     */
+    clientOptions?: ClientOptions;
+
+    /**
+     * Optional. A static seed to use when making model calls.
+     * @remarks
+     * The default is to use a random seed. Specifying a seed will make the model deterministic.
+     */
+    seed?: number;
 
     /**
      * Optional. Whether to use `system` messages when calling the OpenAI API.
@@ -60,6 +90,13 @@ export interface BaseOpenAIModelOptions {
      * prompt to be sent as `user` messages instead.
      */
     useSystemMessages?: boolean;
+
+    /**
+     * Optional. Whether the models responses should be streamed back using Server Sent Events (SSE.)
+     * @remarks
+     * Defaults to `false`.
+     */
+    stream?: boolean;
 }
 
 /**
@@ -89,6 +126,11 @@ export interface OpenAIModelOptions extends BaseOpenAIModelOptions {
      * For Azure OpenAI this is the deployment endpoint.
      */
     endpoint?: string;
+
+    /**
+     * Optional. Project to use when calling the OpenAI API.
+     */
+    project?: string;
 }
 
 /**
@@ -98,7 +140,7 @@ export interface AzureOpenAIModelOptions extends BaseOpenAIModelOptions {
     /**
      * API key to use when making requests to Azure OpenAI.
      */
-    azureApiKey: string;
+    azureApiKey?: string;
 
     /**
      * Default name of the Azure OpenAI deployment (model) to use.
@@ -114,16 +156,35 @@ export interface AzureOpenAIModelOptions extends BaseOpenAIModelOptions {
      * Optional. Version of the API being called. Defaults to `2023-05-15`.
      */
     azureApiVersion?: string;
+
+    /**
+     * Optional. A function that returns an access token for Microsoft Entra (formerly known as Azure Active Directory),
+     * which will be invoked on every request.
+     */
+    azureADTokenProvider?: () => Promise<string>;
 }
 
 /**
  * A `PromptCompletionModel` for calling OpenAI and Azure OpenAI hosted models.
+ * @remarks
+ * The model has been updated to support calling OpenAI's new o1 family of models. That currently
+ * comes with a few constraints. These constraints are mostly handled for you but are worth noting:
+ * - The o1 models introduce a new `max_completion_tokens` parameter and they've deprecated the
+ *  `max_tokens` parameter. The model will automatically convert the incoming `max_tokens` parameter
+ * to `max_completion_tokens` for you. But you should be aware that o1 has hidden token usage and costs
+ * that aren't constrained by the `max_completion_tokens` parameter. This means that you may see an
+ * increase in token usage and costs when using the o1 models.
+ * - The o1 models do not currently support the sending of system messages which just means that the
+ * `useSystemMessages` parameter is ignored when calling the o1 models.
+ * - The o1 models do not currently support setting the `temperature`, `top_p`, and `presence_penalty`
+ * parameters so they will be ignored.
+ * - The o1 models do not currently support the use of tools so you will need to use the "monologue"
+ * augmentation to call actions.
  */
 export class OpenAIModel implements PromptCompletionModel {
-    private readonly _httpClient: AxiosInstance;
+    private readonly _events: PromptCompletionModelEmitter = new EventEmitter() as PromptCompletionModelEmitter;
+    private readonly _client: OpenAI;
     private readonly _useAzure: boolean;
-
-    private readonly UserAgent = '@microsoft/teams-ai-v1';
 
     /**
      * Options the client was configured with.
@@ -132,16 +193,32 @@ export class OpenAIModel implements PromptCompletionModel {
 
     /**
      * Creates a new `OpenAIModel` instance.
-     * @param options Options for configuring the model client.
+     * @param {OpenAIModelOptions} options - Options for configuring the model client.
      */
     public constructor(options: OpenAIModelOptions | AzureOpenAIModelOptions) {
+        // Handle deprecated options
+        if (options.maxRetries == undefined && options.retryPolicy != undefined) {
+            console.warn(`OpenAIModel: The 'retryPolicy' option is deprecated. Use 'maxRetries' instead.`);
+            options.maxRetries = options.retryPolicy.length;
+        }
+        if (options.clientOptions == undefined && options.requestConfig != undefined) {
+            console.warn(`OpenAIModel: The 'requestConfig' option is deprecated. Use 'clientOptions' instead.`);
+            options.clientOptions = {
+                timeout: options.requestConfig.timeout,
+                httpAgent: options.requestConfig.httpsAgent ?? options.requestConfig.httpAgent,
+                defaultHeaders: options.requestConfig.headers as any
+            };
+        }
+
         // Check for azure config
-        if ((options as AzureOpenAIModelOptions).azureApiKey) {
-            this._useAzure = true;
+        if (
+            (options as AzureOpenAIModelOptions).azureApiKey ||
+            (options as AzureOpenAIModelOptions).azureADTokenProvider
+        ) {
+            // Initialize options
             this.options = Object.assign(
                 {
                     completion_type: 'chat',
-                    retryPolicy: [2000, 5000],
                     azureApiVersion: '2023-05-15',
                     useSystemMessages: false
                 },
@@ -159,34 +236,58 @@ export class OpenAIModel implements PromptCompletionModel {
                     `Model created with an invalid endpoint of '${endpoint}'. The endpoint must be a valid HTTPS url.`
                 );
             }
-
             this.options.azureEndpoint = endpoint;
+
+            // Create client
+            // - NOTE: we're not passing in a deployment as that hardcodes the deployment used.
+            this._useAzure = true;
+            this._client = new AzureOpenAI(
+                Object.assign({}, this.options.clientOptions, {
+                    apiKey: this.options.azureApiKey ?? null,
+                    endpoint: this.options.azureEndpoint,
+                    apiVersion: this.options.azureApiVersion,
+                    azureADTokenProvider: this.options.azureADTokenProvider
+                })
+            );
         } else {
-            this._useAzure = false;
+            // Initialize options
             this.options = Object.assign(
                 {
                     completion_type: 'chat',
-                    retryPolicy: [2000, 5000],
                     useSystemMessages: false
                 },
                 options
             ) as OpenAIModelOptions;
-        }
 
-        // Create client
-        this._httpClient = axios.create({
-            validateStatus: (status) => status < 400 || status == 429
-        });
+            // Create client
+            this._useAzure = false;
+            this._client = new OpenAI(
+                Object.assign({}, this.options.clientOptions, {
+                    apiKey: this.options.apiKey,
+                    baseURL: this.options.endpoint,
+                    organization: this.options.organization ?? null,
+                    project: this.options.project ?? null
+                })
+            );
+        }
+    }
+
+    /**
+     * Events emitted by the model.
+     * @returns {PromptCompletionModelEmitter} The events emitted by the model.
+     */
+    public get events(): PromptCompletionModelEmitter {
+        return this._events;
     }
 
     /**
      * Completes a prompt using OpenAI or Azure OpenAI.
-     * @param context Current turn context.
-     * @param memory An interface for accessing state values.
-     * @param functions Functions to use when rendering the prompt.
-     * @param tokenizer Tokenizer to use when rendering the prompt.
-     * @param template Prompt template to complete.
-     * @returns A `PromptResponse` with the status and message.
+     * @param {TurnContext} context - Current turn context.
+     * @param {Memory} memory - An interface for accessing state values.
+     * @param {PromptFunctions} functions - Functions to use when rendering the prompt.
+     * @param {Tokenizer} tokenizer - Tokenizer to use when rendering the prompt.
+     * @param {PromptTemplate} template - Prompt template to complete.
+     * @returns {Promise<PromptResponse<string>>} A `PromptResponse` with the status and message.
      */
     public async completePrompt(
         context: TurnContext,
@@ -197,185 +298,266 @@ export class OpenAIModel implements PromptCompletionModel {
     ): Promise<PromptResponse<string>> {
         const startTime = Date.now();
         const max_input_tokens = template.config.completion.max_input_tokens;
-        const completion_type = template.config.completion.completion_type ?? this.options.completion_type;
         const model =
             template.config.completion.model ??
             (this._useAzure
                 ? (this.options as AzureOpenAIModelOptions).azureDefaultDeployment
                 : (this.options as OpenAIModelOptions).defaultModel);
-        if (completion_type == 'text') {
-            // Render prompt
-            const result = await template.prompt.renderAsText(context, memory, functions, tokenizer, max_input_tokens);
-            if (result.tooLong) {
-                return {
-                    status: 'too_long',
-                    input: undefined,
-                    error: new Error(
-                        `The generated text completion prompt had a length of ${result.length} tokens which exceeded the max_input_tokens of ${max_input_tokens}.`
-                    )
-                };
-            }
-            if (this.options.logRequests) {
-                console.log(Colorize.title('PROMPT:'));
-                console.log(Colorize.output(result.output));
-            }
 
-            // Call text completion API
-            const request: CreateCompletionRequest = this.copyOptionsToRequest<CreateCompletionRequest>(
-                {
-                    prompt: result.output
-                },
-                template.config.completion,
-                [
-                    'max_tokens',
-                    'temperature',
-                    'top_p',
-                    'n',
-                    'stream',
-                    'logprobs',
-                    'echo',
-                    'stop',
-                    'presence_penalty',
-                    'frequency_penalty',
-                    'best_of',
-                    'logit_bias',
-                    'user'
-                ]
+        // Check for legacy completion type
+        if (template.config.completion.completion_type == 'text') {
+            throw new Error(
+                `The completion_type 'text' is no longer supported. Only 'chat' based models are supported.`
             );
-            const response = await this.createCompletion(request, model);
-            if (this.options.logRequests) {
-                console.log(Colorize.title('RESPONSE:'));
-                console.log(Colorize.value('status', response.status));
-                console.log(Colorize.value('duration', Date.now() - startTime, 'ms'));
-                console.log(Colorize.output(response.data));
-            }
+        }
 
-            // Process response
-            if (response.status < 300) {
-                const completion = response.data.choices[0];
-                return {
-                    status: 'success',
-                    input: undefined,
-                    message: { role: 'assistant', content: completion.text ?? '' }
-                };
-            } else if (response.status == 429) {
-                if (this.options.logRequests) {
-                    console.log(Colorize.title('HEADERS:'));
-                    console.log(Colorize.output(response.headers));
+        // Signal start of completion
+        const streaming = this.options.stream;
+        this._events.emit('beforeCompletion', context, memory, functions, tokenizer, template, !!streaming);
+
+        // Render prompt
+        const result = await template.prompt.renderAsMessages(context, memory, functions, tokenizer, max_input_tokens);
+        if (result.tooLong) {
+            return this.returnTooLong(max_input_tokens, result.length);
+        }
+
+        // Check for use of system messages
+        // - 'user' messages tend to be followed better by the model then 'system' messages.
+        const isO1Model = model.startsWith('o1-');
+        const useSystemMessages = !isO1Model && this.options.useSystemMessages;
+        if (!useSystemMessages && result.output.length > 0 && result.output[0].role == 'system') {
+            result.output[0].role = 'user';
+        }
+
+        // Log the generated prompt
+        if (this.options.logRequests) {
+            console.log(Colorize.title('CHAT PROMPT:'));
+            console.log(Colorize.output(result.output));
+        }
+
+        // Format messages to ChatCompletionMessageParam[]
+        const updatedMessages = this.convertMessages(result.output);
+        // Get input message
+        // - we're doing this here because the input message can be complex and include images.
+        const input = this.getInputMessage(result.output);
+
+        try {
+            // Get the chat completion parameters
+            const params = this.getChatCompletionParams(model, updatedMessages, template);
+            if (isO1Model) {
+                if (params.max_tokens) {
+                    params.max_completion_tokens = params.max_tokens;
+                    delete params.max_tokens;
                 }
-                return {
-                    status: 'rate_limited',
-                    input: undefined,
-                    error: new Error(`The text completion API returned a rate limit error.`)
-                };
-            } else {
-                return {
-                    status: 'error',
-                    input: undefined,
-                    error: new Error(
-                        `The text completion API returned an error status of ${response.status}: ${response.statusText}`
-                    )
-                };
-            }
-        } else {
-            // Render prompt
-            const result = await template.prompt.renderAsMessages(
-                context,
-                memory,
-                functions,
-                tokenizer,
-                max_input_tokens
-            );
-            if (result.tooLong) {
-                return {
-                    status: 'too_long',
-                    input: undefined,
-                    error: new Error(
-                        `The generated chat completion prompt had a length of ${result.length} tokens which exceeded the max_input_tokens of ${max_input_tokens}.`
-                    )
-                };
-            }
-            if (!this.options.useSystemMessages && result.output.length > 0 && result.output[0].role == 'system') {
-                result.output[0].role = 'user';
-            }
-            if (this.options.logRequests) {
-                console.log(Colorize.title('CHAT PROMPT:'));
-                console.log(Colorize.output(result.output));
+                params.temperature = 1;
+                params.top_p = 1;
+                params.presence_penalty = 0;
             }
 
-            // Get input message
-            // - we're doing this here because the input message can be complex and include images.
-            let input: Message<any> | undefined;
-            const last = result.output.length - 1;
-            if (last > 0 && result.output[last].role == 'user') {
-                input = result.output[last];
-            }
+            // Check for tools augmentation
+            const isToolsAugmentation =
+                template.config.augmentation && template.config.augmentation?.augmentation_type == 'tools';
 
             // Call chat completion API
-            const request: CreateChatCompletionRequest = this.copyOptionsToRequest<CreateChatCompletionRequest>(
-                {
-                    messages: result.output as ChatCompletionRequestMessage[]
-                },
-                template.config.completion,
-                [
-                    'max_tokens',
-                    'temperature',
-                    'top_p',
-                    'n',
-                    'stream',
-                    'logprobs',
-                    'echo',
-                    'stop',
-                    'presence_penalty',
-                    'frequency_penalty',
-                    'best_of',
-                    'logit_bias',
-                    'user',
-                    'functions',
-                    'function_call'
-                ]
-            );
-            const response = await this.createChatCompletion(request, model);
-            if (this.options.logRequests) {
-                console.log(Colorize.title('CHAT RESPONSE:'));
-                console.log(Colorize.value('status', response.status));
-                console.log(Colorize.value('duration', Date.now() - startTime, 'ms'));
-                console.log(Colorize.output(response.data));
+            let message: Message<string>;
+            const completion = await this._client.chat.completions.create(params);
+            if (params.stream) {
+                // Log start of streaming
+                if (this.options.logRequests) {
+                    console.log(Colorize.title('STREAM STARTED:'));
+                }
+
+                // Enumerate the streams chunks
+                message = { role: 'assistant', content: '' };
+                for await (const chunk of completion as Stream<ChatCompletionChunk>) {
+                    const delta: ChatCompletionChunk.Choice.Delta = chunk.choices[0]?.delta || {};
+                    if (delta.role) {
+                        message.role = delta.role;
+                    }
+                    if (delta.content) {
+                        message.content += delta.content;
+                    }
+
+                    // Handle tool calls
+                    // - We don't know how many tool calls there will be so we need to add them one-by-one.
+                    if (isToolsAugmentation && delta.tool_calls) {
+                        // Create action calls array if it doesn't exist
+                        if (!Array.isArray(message.action_calls)) {
+                            message.action_calls = [];
+                        }
+
+                        // Add tool calls to action calls
+                        for (const toolCall of delta.tool_calls) {
+                            // Add empty tool call to message if new index
+                            // - Note that a single tool call can span multiple chunks.
+                            const index = toolCall.index;
+                            if (index >= message.action_calls.length) {
+                                message.action_calls.push({
+                                    id: '',
+                                    function: { name: '', arguments: '' },
+                                    type: ''
+                                } as any);
+                            }
+
+                            // Set ID if provided
+                            if (toolCall.id) {
+                                message.action_calls[index].id = toolCall.id;
+                            }
+
+                            // Set type if provided
+                            if (toolCall.type) {
+                                message.action_calls[index].type = toolCall.type;
+                            }
+
+                            // Append function name if provided
+                            if (toolCall.function?.name) {
+                                message.action_calls[index].function.name += toolCall.function.name;
+                            }
+
+                            // Append function arguments if provided
+                            if (toolCall.function?.arguments) {
+                                message.action_calls[index].function.arguments += toolCall.function.arguments;
+                            }
+                        }
+                    }
+
+                    // Signal chunk received
+                    if (this.options.logRequests) {
+                        console.log(Colorize.value('CHUNK', delta));
+                    }
+                    this._events.emit('chunkReceived', context, memory, { delta: delta as Partial<Message<string>> });
+                }
+
+                // Log stream completion
+                if (this.options.logRequests) {
+                    console.log(Colorize.title('STREAM COMPLETED:'));
+                    console.log(Colorize.value('duration', Date.now() - startTime, 'ms'));
+                }
+            } else {
+                const responseMessage = (completion as ChatCompletion).choices![0].message;
+                message = {
+                    role: responseMessage.role,
+                    content: responseMessage.content ?? ''
+                };
+
+                // Preserve message context if there is any
+                const messageWithContext = responseMessage as Message<string>;
+
+                if (messageWithContext.context) {
+                    message.context = messageWithContext.context;
+                }
+                const actionCalls: ActionCall[] = [];
+
+                // Log tool calls to be added to message of type Message<string> as action_calls
+                if (isToolsAugmentation && responseMessage?.tool_calls) {
+                    for (const toolCall of responseMessage.tool_calls) {
+                        actionCalls.push({
+                            id: toolCall.id,
+                            function: {
+                                name: toolCall.function.name,
+                                arguments: toolCall.function.arguments
+                            },
+                            type: toolCall.type
+                        });
+                    }
+                }
+                if (actionCalls.length > 0) {
+                    message.action_calls = actionCalls;
+                }
+
+                // Log the generated response
+                if (this.options.logRequests) {
+                    console.log(Colorize.title('CHAT RESPONSE:'));
+                    console.log(Colorize.value('duration', Date.now() - startTime, 'ms'));
+                    console.log(Colorize.output(message));
+                }
             }
 
-            // Process response
-            if (response.status < 300) {
-                const completion = response.data.choices[0];
-                return { status: 'success', input, message: completion.message ?? { role: 'assistant', content: '' } };
-            } else if (response.status == 429) {
-                if (this.options.logRequests) {
-                    console.log(Colorize.title('HEADERS:'));
-                    console.log(Colorize.output(response.headers));
-                }
-                return {
-                    status: 'rate_limited',
-                    input: undefined,
-                    error: new Error(`The chat completion API returned a rate limit error.`)
-                };
-            } else {
-                return {
-                    status: 'error',
-                    input: undefined,
-                    error: new Error(
-                        `The chat completion API returned an error status of ${response.status}: ${response.statusText}`
-                    )
-                };
-            }
+            // Signal response received
+            const response: PromptResponse<string> = { status: 'success', input, message };
+            const streamer: StreamingResponse = memory.getValue('temp.streamer');
+            this._events.emit('responseReceived', context, memory, response, streamer);
+
+            // Let any pending events flush before returning
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            return response;
+        } catch (err: unknown) {
+            console.log(err);
+            return this.returnError(err, input);
         }
     }
 
     /**
-     * @param target
-     * @param src
-     * @param fields
-     * @private
+     * Converts the messages to ChatCompletionMessageParam[].
+     * @param {Message<string>} messages - The messages from result.output.
+     * @returns {ChatCompletionMessageParam[]} - The converted messages.
      */
-    protected copyOptionsToRequest<TRequest>(target: Partial<TRequest>, src: any, fields: string[]): TRequest {
+    private convertMessages(messages: Message<string>[]): ChatCompletionMessageParam[] {
+        const params: ChatCompletionMessageParam[] = [];
+        // Iterate through the messages and check for action calls
+
+        for (const message of messages) {
+            let param: ChatCompletionMessageParam = {
+                role: 'user',
+                content: ''
+            };
+
+            if (message.role === 'user') {
+                param.content = message.content ?? '';
+            } else if (message.role === 'system') {
+                param = {
+                    role: 'system',
+                    content: message.content ?? ''
+                };
+            } else if (message.role === 'assistant') {
+                param = {
+                    role: 'assistant',
+                    content: message.content ?? ''
+                };
+                const toolCallParams: ChatCompletionMessageToolCall[] = [];
+
+                if (message.action_calls && message.action_calls.length > 0) {
+                    for (const toolCall of message.action_calls) {
+                        toolCallParams.push({
+                            id: toolCall.id,
+                            function: {
+                                name: toolCall.function.name,
+                                arguments: toolCall.function.arguments
+                            },
+                            type: toolCall.type
+                        });
+                    }
+
+                    param.tool_calls = toolCallParams;
+                }
+            } else if (message.role === 'tool') {
+                param = {
+                    role: 'tool',
+                    content: message.content ?? '',
+                    tool_call_id: message.action_call_id ?? ''
+                };
+            } else {
+                param = {
+                    role: 'function',
+                    content: message.content ?? '',
+                    name: message.name ?? ''
+                };
+            }
+            params.push(param);
+        }
+
+        return params;
+    }
+
+    /**
+     * @private
+     * @template TRequest
+     * @param {Partial<TRequest>} target - The target TRequest.
+     * @param {any} src - The source object.
+     * @param {string[]} fields - List of fields to copy.
+     * @returns {TRequest} The TRequest
+     */
+    private copyOptionsToRequest<TRequest>(target: Partial<TRequest>, src: any, fields: string[]): TRequest {
         for (const field of fields) {
             if (src[field] !== undefined) {
                 (target as any)[field] = src[field];
@@ -386,96 +568,157 @@ export class OpenAIModel implements PromptCompletionModel {
     }
 
     /**
-     * @param request
-     * @param model
      * @private
+     * @param {string} model - Model to use.
+     * @param {ChatCompletionMessageParam[]} messages - Messages to send.
+     * @param {PromptTemplate} template Prompt template being used.
+     * @returns {ChatCompletionCreateParams} Chat completion parameters.
      */
-    protected createCompletion(
-        request: CreateCompletionRequest,
-        model: string
-    ): Promise<AxiosResponse<CreateCompletionResponse>> {
-        if (this._useAzure) {
-            const options = this.options as AzureOpenAIModelOptions;
-            const url = `${
-                options.azureEndpoint
-            }/openai/deployments/${model}/completions?api-version=${options.azureApiVersion!}`;
-            return this.post(url, request);
-        } else {
-            const options = this.options as OpenAIModelOptions;
-            const url = `${options.endpoint ?? 'https://api.openai.com'}/v1/completions`;
-            (request as OpenAICreateCompletionRequest).model = model;
-            return this.post(url, request);
-        }
-    }
+    private getChatCompletionParams(
+        model: string,
+        messages: ChatCompletionMessageParam[],
+        template: PromptTemplate
+    ): ChatCompletionCreateParams {
+        let completion = template.config.completion;
 
-    /**
-     * @param request
-     * @param model
-     * @private
-     */
-    protected createChatCompletion(
-        request: CreateChatCompletionRequest,
-        model: string
-    ): Promise<AxiosResponse<CreateChatCompletionResponse>> {
-        if (this._useAzure) {
-            const options = this.options as AzureOpenAIModelOptions;
-            const url = `${
-                options.azureEndpoint
-            }/openai/deployments/${model}/chat/completions?api-version=${options.azureApiVersion!}`;
-            return this.post(url, request);
-        } else {
-            const options = this.options as OpenAIModelOptions;
-            const url = `${options.endpoint ?? 'https://api.openai.com'}/v1/chat/completions`;
-            (request as OpenAICreateChatCompletionRequest).model = model;
-            return this.post(url, request);
-        }
-    }
+        // Validate Tools Augmentation
+        const isToolsAugmentation =
+            template.config.augmentation && template.config.augmentation?.augmentation_type == 'tools';
 
-    /**
-     * @param url
-     * @param body
-     * @param retryCount
-     * @private
-     */
-    protected async post<TData>(url: string, body: object, retryCount = 0): Promise<AxiosResponse<TData>> {
-        // Initialize request config
-        const requestConfig: AxiosRequestConfig = Object.assign({}, this.options.requestConfig);
+        if (isToolsAugmentation) {
+            const chatCompletionTools = isToolsAugmentation
+                ? template.actions?.map((action) => {
+                      const chatCompletionTool: ChatCompletionTool = {
+                          type: 'function',
+                          function: {
+                              name: action.name,
+                              description: action.description ?? '',
+                              parameters: (action.parameters as Record<string, any>) ?? {}
+                          }
+                      };
+                      return chatCompletionTool;
+                  })
+                : [];
 
-        // Initialize request headers
-        if (!requestConfig.headers) {
-            requestConfig.headers = {};
+            const parallelToolCalls = template.config.completion.parallel_tool_calls || undefined;
+
+            completion = {
+                ...completion,
+                tool_choice: template.config.completion.tool_choice ?? 'auto',
+                ...(chatCompletionTools && chatCompletionTools.length > 0 && { tools: chatCompletionTools }),
+                // Only include parallel_tool_calls if tools are enabled and the template has it set; otherwise, it will default to true without being added to the API call
+                ...(!!parallelToolCalls && { parallel_tool_calls: parallelToolCalls })
+            };
         }
-        if (!requestConfig.headers['Content-Type']) {
-            requestConfig.headers['Content-Type'] = 'application/json';
+
+        const params: ChatCompletionCreateParams = this.copyOptionsToRequest<ChatCompletionCreateParams>(
+            {
+                messages: messages
+            },
+            completion,
+            [
+                'max_tokens',
+                'temperature',
+                'top_p',
+                'n',
+                'stream',
+                'logprobs',
+                'top_logprobs',
+                'stop',
+                'presence_penalty',
+                'frequency_penalty',
+                'logit_bias',
+                'user',
+                'functions',
+                'function_call',
+                'data_sources',
+                'response_format',
+                'seed',
+                'tool_choice',
+                'tools',
+                'parallel_tool_calls'
+            ]
+        );
+        if (this.options.responseFormat) {
+            params.response_format = this.options.responseFormat;
         }
-        if (!requestConfig.headers['User-Agent']) {
-            requestConfig.headers['User-Agent'] = this.UserAgent;
+        if (this.options.seed !== undefined) {
+            params.seed = this.options.seed;
         }
-        if (this._useAzure) {
-            const options = this.options as AzureOpenAIModelOptions;
-            requestConfig.headers['api-key'] = options.azureApiKey;
-        } else {
-            const options = this.options as OpenAIModelOptions;
-            requestConfig.headers['Authorization'] = `Bearer ${options.apiKey}`;
-            if (options.organization) {
-                requestConfig.headers['OpenAI-Organization'] = options.organization;
+        if (this.options.stream) {
+            params.stream = true;
+        }
+        params.model = model;
+
+        // Remove tool params if not using tools
+        if (!Array.isArray(params.tools) || params.tools.length == 0) {
+            if (params.tool_choice) {
+                delete params.tool_choice;
             }
         }
 
-        // Send request
-        const response = await this._httpClient.post(url, body, requestConfig);
+        return params;
+    }
 
-        // Check for rate limit error
-        if (
-            response.status == 429 &&
-            Array.isArray(this.options.retryPolicy) &&
-            retryCount < this.options.retryPolicy.length
-        ) {
-            const delay = this.options.retryPolicy[retryCount];
-            await new Promise((resolve) => setTimeout(resolve, delay));
-            return this.post(url, body, retryCount + 1);
+    private getInputMessage(messages: Message<string>[]): Message<string>[] | Message<string> | undefined {
+        const last = messages.length - 1;
+        if (last > 0 && messages[last].role !== 'assistant') {
+            // Handling for when there are multiple action output responses (e.g. user message instantiated multiple tool calls)
+            if (messages[last].role === 'tool') {
+                const toolsInput: Message<string>[] = [];
+
+                for (let i = messages.length - 1; i >= 0; i--) {
+                    if (messages[i].action_calls) {
+                        break;
+                    }
+                    toolsInput.unshift(messages[i]);
+                }
+                return toolsInput;
+            }
+
+            return messages[last];
+        }
+
+        return undefined;
+    }
+
+    private returnTooLong(max_input_tokens: number, length: number): PromptResponse<string> {
+        return {
+            status: 'too_long',
+            input: undefined,
+            error: new Error(
+                `The generated chat completion prompt had a length of ${length} tokens which exceeded the max_input_tokens of ${max_input_tokens}.`
+            )
+        };
+    }
+
+    private returnError(err: unknown, input: Message<string>[] | Message<string> | undefined): PromptResponse<string> {
+        if (err instanceof OpenAI.APIError) {
+            if (this.options.logRequests) {
+                console.log(Colorize.title('ERROR:'));
+                console.log(Colorize.output(err.message));
+                console.log(Colorize.title('HEADERS:'));
+                console.log(Colorize.output(err.headers as any));
+            }
+            if (err.status == 429) {
+                return {
+                    status: 'rate_limited',
+                    input,
+                    error: new Error(`The chat completion API returned a rate limit error.`)
+                };
+            } else {
+                return {
+                    status: 'error',
+                    input,
+                    error: new Error(`The chat completion API returned an error status of ${err.status}: ${err.name}`)
+                };
+            }
         } else {
-            return response;
+            return {
+                status: 'error',
+                input,
+                error: new Error(`The chat completion API returned an error: ${(err as Error).toString()}`)
+            };
         }
     }
 }

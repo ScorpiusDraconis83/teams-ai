@@ -7,92 +7,27 @@
  */
 
 import { TurnContext } from 'botbuilder-core';
-import { ChatCompletionAction, PromptResponse } from '../models';
+
+import { ActionResponseValidator, JSONResponseValidator, Validation } from '../validators';
+import { ChatCompletionAction } from '../models';
+import { InnerMonologue, InnerMonologueSchema, PromptResponse } from '../types';
+import { Memory } from '../MemoryFork';
+import { Message, PromptSection } from '../prompts';
 import { Plan, PredictedCommand, PredictedDoCommand, PredictedSayCommand } from '../planners';
 import { Tokenizer } from '../tokenizers';
-import { ActionResponseValidator, JSONResponseValidator, Validation } from '../validators';
+
 import { Augmentation } from './Augmentation';
 import { ActionAugmentationSection } from './ActionAugmentationSection';
-import { Schema } from 'jsonschema';
-import { Message, PromptSection } from '../prompts';
-import { Memory } from '../MemoryFork';
 
 /**
  * @private
  */
-const MISSING_ACTION_FEEDBACK = `The JSON returned had errors. Apply these fixes:\nadd the \"action\" property to \"instance\"`;
+const MISSING_ACTION_FEEDBACK = `The JSON returned had errors. Apply these fixes:\nadd the "action" property to "instance"`;
 
 /**
  * @private
  */
 const SAY_REDIRECT_FEEDBACK = `The JSON returned was missing an action. Return a valid JSON object that contains your thoughts and uses the SAY action.`;
-
-/**
- * Structure used to track the inner monologue of an LLM.
- */
-export interface InnerMonologue {
-    /**
-     * The LLM's thoughts.
-     */
-    thoughts: {
-        /**
-         * The LLM's current thought.
-         */
-        thought: string;
-
-        /**
-         * The LLM's reasoning for the current thought.
-         */
-        reasoning: string;
-
-        /**
-         * The LLM's plan for the future.
-         */
-        plan: string;
-    };
-
-    /**
-     * The next action to perform.
-     */
-    action: {
-        /**
-         * Name of the action to perform.
-         */
-        name: string;
-
-        /**
-         * Optional. Parameters for the action.
-         */
-        parameters?: Record<string, any>;
-    };
-}
-
-/**
- * JSON schema for validating an `InnerMonologue`.
- */
-export const InnerMonologueSchema: Schema = {
-    type: 'object',
-    properties: {
-        thoughts: {
-            type: 'object',
-            properties: {
-                thought: { type: 'string' },
-                reasoning: { type: 'string' },
-                plan: { type: 'string' }
-            },
-            required: ['thought', 'reasoning', 'plan']
-        },
-        action: {
-            type: 'object',
-            properties: {
-                name: { type: 'string' },
-                parameters: { type: 'object' }
-            },
-            required: ['name']
-        }
-    },
-    required: ['thoughts', 'action']
-};
 
 /**
  * The 'monologue' augmentation.
@@ -110,7 +45,7 @@ export class MonologueAugmentation implements Augmentation<InnerMonologue | unde
 
     /**
      * Creates a new `MonologueAugmentation` instance.
-     * @param actions List of actions supported by the prompt.
+     * @param {ChatCompletionAction[]} actions - List of actions supported by the prompt.
      */
     public constructor(actions: ChatCompletionAction[]) {
         actions = appendSAYAction(actions);
@@ -129,7 +64,7 @@ export class MonologueAugmentation implements Augmentation<InnerMonologue | unde
     }
 
     /**
-     * Creates an optional prompt section for the augmentation.
+     * @returns {PromptSection|undefined} Returns an optional prompt section for the augmentation.
      */
     public createPromptSection(): PromptSection | undefined {
         return this._section;
@@ -137,12 +72,12 @@ export class MonologueAugmentation implements Augmentation<InnerMonologue | unde
 
     /**
      * Validates a response to a prompt.
-     * @param context Context for the current turn of conversation with the user.
-     * @param memory An interface for accessing state values.
-     * @param tokenizer Tokenizer to use for encoding and decoding text.
-     * @param response Response to validate.
-     * @param remaining_attempts Number of remaining attempts to validate the response.
-     * @returns A `Validation` object.
+     * @param {TurnContext} context - Context for the current turn of conversation with the user.
+     * @param {Memory} memory - An interface for accessing state values.
+     * @param {Tokenizer} tokenizer - Tokenizer to use for encoding and decoding text.
+     * @param {PromptResponse<string>} response - Response to validate.
+     * @param {number} remaining_attempts - Number of remaining attempts to validate the response.
+     * @returns {Validation} A `Validation` object.
      */
     public async validateResponse(
         context: TurnContext,
@@ -193,10 +128,10 @@ export class MonologueAugmentation implements Augmentation<InnerMonologue | unde
 
     /**
      * Creates a plan given validated response value.
-     * @param context Context for the current turn of conversation.
-     * @param memory An interface for accessing state variables.
-     * @param response The validated and transformed response for the prompt.
-     * @returns The created plan.
+     * @param {TurnContext} context - Context for the current turn of conversation.
+     * @param {Memory} memory - An interface for accessing state variables.
+     * @param {PromptResponse<InnerMonologue|undefined>} response - The validated and transformed response for the prompt.
+     * @returns {Plan} The created plan.
      */
     public createPlanFromResponse(
         context: TurnContext,
@@ -209,7 +144,10 @@ export class MonologueAugmentation implements Augmentation<InnerMonologue | unde
         if (monologue.action.name == 'SAY') {
             command = {
                 type: 'SAY',
-                response: monologue.action.parameters!.text
+                response: {
+                    ...response.message,
+                    content: monologue.action.parameters?.text || ''
+                }
             } as PredictedSayCommand;
         } else {
             command = {
@@ -223,8 +161,9 @@ export class MonologueAugmentation implements Augmentation<InnerMonologue | unde
 }
 
 /**
- * @param actions
  * @private
+ * @param {ChatCompletionAction[]} actions - List of actions
+ * @returns {ChatCompletionAction[]} The modified list of actions.
  */
 function appendSAYAction(actions: ChatCompletionAction[]): ChatCompletionAction[] {
     const clone = actions.slice();

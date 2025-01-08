@@ -11,66 +11,6 @@ import { ChatCompletionAction } from '../models/ChatCompletionAction';
 /**
  * @private
  */
-export interface CreateCompletionRequest {
-    prompt?: CreateCompletionRequestPrompt | null;
-    suffix?: string | null;
-    max_tokens?: number | null;
-    temperature?: number | null;
-    top_p?: number | null;
-    n?: number | null;
-    stream?: boolean | null;
-    logprobs?: number | null;
-    echo?: boolean | null;
-    stop?: CreateCompletionRequestStop | null;
-    presence_penalty?: number | null;
-    frequency_penalty?: number | null;
-    best_of?: number | null;
-    logit_bias?: object | null;
-    user?: string;
-}
-
-/**
- * @private
- */
-export interface OpenAICreateCompletionRequest extends CreateCompletionRequest {
-    model: string;
-}
-
-/**
- * @private
- */
-export interface CreateCompletionResponse {
-    id: string;
-    object: string;
-    created: number;
-    model: string;
-    choices: Array<CreateCompletionResponseChoicesInner>;
-    usage?: CreateCompletionResponseUsage;
-}
-
-/**
- * @private
- */
-export interface CreateCompletionResponseChoicesInner {
-    text?: string;
-    index?: number;
-    logprobs?: CreateCompletionResponseChoicesInnerLogprobs | null;
-    finish_reason?: string;
-}
-
-/**
- * @private
- */
-export interface CreateCompletionResponseChoicesInnerLogprobs {
-    tokens?: Array<string>;
-    token_logprobs?: Array<number>;
-    top_logprobs?: Array<object>;
-    text_offset?: Array<number>;
-}
-
-/**
- * @private
- */
 export interface CreateCompletionResponseUsage {
     prompt_tokens: number;
     completion_tokens: number;
@@ -82,8 +22,7 @@ export interface CreateCompletionResponseUsage {
  */
 export interface CreateChatCompletionRequest {
     messages: Array<ChatCompletionRequestMessage>;
-    functions?: Array<ChatCompletionAction>;
-    function_call?: CreateChatCompletionRequestFunctionCall;
+    model: string;
     temperature?: number | null;
     top_p?: number | null;
     n?: number | null;
@@ -94,12 +33,87 @@ export interface CreateChatCompletionRequest {
     frequency_penalty?: number | null;
     logit_bias?: object | null;
     user?: string;
+    logprobs?: boolean | false;
+    top_logprobs?: number | null;
+    response_format?: object | null;
+    seed?: number | null;
+    tools?: Array<CreateChatCompletionTool>;
+    tool_choice?: CreateChatCompletionRequestFunctionCall;
+}
+
+export interface AzureOpenAIChatCompletionRequest extends OpenAICreateChatCompletionRequest {
+    data_sources?: AzureOpenAIChatCompletionDataSources[];
+}
+
+export type AzureOpenAIChatCompletionDataSources = AzureAISearchDataSource;
+
+export interface AzureAISearchDataSource {
+    type: 'azure_search';
+    parameters: {
+        endpoint: string;
+        index_name: string;
+        authentication:
+            | ApiKeyAuthenticationOptions
+            | SystemAssignedManagedIdentityAuthenticationOptions
+            | UserAssignedManagedIdentityAuthenticationOptions;
+        embedding_dependency: DeploymentNameVectorizationSource | EndpointVectorizationSource;
+        fields_mapping?: FieldsMapping;
+        filter?: string;
+        in_scope?: boolean;
+        query_type?: 'simple' | 'semantic' | 'vector' | 'vector_simple_hybrid' | 'vector_semantic_hybrid';
+        role_information?: string;
+        semantic_configuration?: string;
+        strictness?: number;
+        top_n_documents?: number;
+    };
+}
+
+export interface DeploymentNameVectorizationSource {
+    type: 'deployment_name';
+    deployment_name: string;
+}
+
+export interface EndpointVectorizationSource {
+    type: 'endpoint';
+    endpoint: string;
+    authentication: ApiKeyAuthenticationOptions;
+}
+
+export interface ApiKeyAuthenticationOptions {
+    type: 'api_key';
+    key: string;
+}
+
+export interface SystemAssignedManagedIdentityAuthenticationOptions {
+    type: 'system_assigned_managed_identity';
+}
+
+export interface UserAssignedManagedIdentityAuthenticationOptions {
+    type: 'user_assigned_managed_identity';
+    managed_identity_resource_id: string;
+}
+
+export interface FieldsMapping {
+    content_fields: string[];
+    vector_fields: string[];
+    content_fields_separator: string;
+    filepath_field: string;
+    title_field: string;
+    url_field: string;
 }
 
 /**
  * @private
  */
 export declare type CreateChatCompletionRequestFunctionCall = CreateChatCompletionRequestFunctionCallOneOf | string;
+
+/**
+ * @private
+ */
+export interface CreateChatCompletionTool {
+    type: 'function';
+    function: ChatCompletionAction;
+}
 
 /**
  * @private
@@ -118,11 +132,21 @@ export interface OpenAICreateChatCompletionRequest extends CreateChatCompletionR
 /**
  * @private
  */
+export interface ChatCompletionRequestMessageToolCall {
+    id: string;
+    type: 'function';
+    function: ChatCompletionRequestMessageFunctionCall;
+}
+
+/**
+ * @private
+ */
 export interface ChatCompletionRequestMessage {
-    role: 'system' | 'user' | 'assistant';
+    role: 'system' | 'user' | 'assistant' | 'tool';
     content: string;
     name?: string;
-    function_call?: ChatCompletionRequestMessageFunctionCall;
+    tool_calls?: Array<ChatCompletionRequestMessageToolCall>;
+    tool_call_id?: string;
 }
 
 /**
@@ -134,7 +158,8 @@ export interface CreateChatCompletionResponse {
     created: number;
     model: string;
     choices: Array<CreateChatCompletionResponseChoicesInner>;
-    usage?: CreateCompletionResponseUsage;
+    usage: CreateCompletionResponseUsage;
+    system_fingerprint: string;
 }
 
 /**
@@ -142,8 +167,9 @@ export interface CreateChatCompletionResponse {
  */
 export interface CreateChatCompletionResponseChoicesInner {
     index?: number;
-    message?: ChatCompletionResponseMessage;
+    message?: ChatCompletionResponseMessage | AzureOpenAIChatCompletionResponseMessage;
     finish_reason?: string;
+    logprobs?: object | null;
 }
 
 /**
@@ -152,7 +178,28 @@ export interface CreateChatCompletionResponseChoicesInner {
 export interface ChatCompletionResponseMessage {
     role: 'system' | 'user' | 'assistant';
     content: string | undefined;
-    function_call?: ChatCompletionRequestMessageFunctionCall;
+    tool_calls?: Array<ChatCompletionRequestMessageToolCall>;
+}
+
+/**
+ * @private
+ */
+export interface AzureOpenAIChatCompletionResponseMessage extends ChatCompletionResponseMessage {
+    context?: {
+        citations: AzureOpenAIChatCompletionCitation[];
+        intent: string;
+    };
+}
+
+/**
+ * @private
+ */
+export interface AzureOpenAIChatCompletionCitation {
+    content: string;
+    title: string;
+    url: string;
+    filepath: string;
+    chunk_id: string;
 }
 
 /**
@@ -220,7 +267,10 @@ export interface CreateModerationResponseResultsInnerCategoryScores {
  */
 export interface CreateEmbeddingRequest {
     input: CreateEmbeddingRequestInput;
+    model: string;
+    encoding_format?: string;
     user?: string;
+    dimensions?: number;
 }
 
 /**
@@ -275,6 +325,11 @@ export type CreateChatCompletionRequestStop = Array<string> | string;
 /**
  * @private
  */
+export type ChatCompletionRequestToolChoice = object | string;
+
+/**
+ * @private
+ */
 export type CreateModerationRequestInput = Array<string> | string;
 
 /**
@@ -325,7 +380,7 @@ export interface ContentSafetyOptions {
      * When set to false, all analyses of harmful content will be performed, whether or not blocklists are hit.
      * Default value is false.
      */
-    breakByBlocklists?: boolean;
+    haltOnBlocklistHit?: boolean;
 }
 
 export interface CreateContentSafetyRequest extends ContentSafetyOptions {
@@ -344,9 +399,10 @@ export interface ContentSafetyHarmCategory {
 }
 
 export interface CreateContentSafetyResponse {
-    blocklistsMatchResults: Array<string>;
-    hateResult: ContentSafetyHarmCategory;
-    selfHarmResult: ContentSafetyHarmCategory;
-    sexualResult: ContentSafetyHarmCategory;
-    violenceResult: ContentSafetyHarmCategory;
+    blocklistsMatch: Array<{
+        blockListName: string;
+        blockListItemId: string;
+        blockListItemText: string;
+    }>;
+    categoriesAnalysis: Array<ContentSafetyHarmCategory>;
 }

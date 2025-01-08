@@ -7,10 +7,12 @@
  */
 
 import { TurnContext } from 'botbuilder';
-import { Tokenizer } from '../tokenizers';
-import { PromptResponse } from '../models';
-import { Validation, PromptResponseValidator } from './PromptResponseValidator';
+
 import { Memory } from '../MemoryFork';
+import { Tokenizer } from '../tokenizers';
+import { PromptResponse } from '../types';
+
+import { Validation, PromptResponseValidator } from './PromptResponseValidator';
 
 /**
  * Default response validator that always returns true.
@@ -19,12 +21,12 @@ import { Memory } from '../MemoryFork';
 export class DefaultResponseValidator<TValue = any> implements PromptResponseValidator<TValue> {
     /**
      * Validates a response to a prompt.
-     * @param context Context for the current turn of conversation with the user.
-     * @param memory An interface for accessing state values.
-     * @param tokenizer Tokenizer to use for encoding and decoding text.
-     * @param response Response to validate.
-     * @param remaining_attempts Number of remaining attempts to validate the response.
-     * @returns A `Validation` object.
+     * @param {TurnContext} context Context for the current turn of conversation with the user.
+     * @param {Memory} memory An interface for accessing state values.
+     * @param {Tokenizer} tokenizer Tokenizer to use for encoding and decoding text.
+     * @param {PromptResponse<string>} response Response to validate.
+     * @param {number} remaining_attempts Number of remaining attempts to validate the response.
+     * @returns {Promise<Validation<TValue>>} A `Validation` object.
      */
     public validateResponse(
         context: TurnContext,

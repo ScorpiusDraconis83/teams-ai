@@ -22,12 +22,17 @@ namespace Microsoft.Teams.AI.Tests.AITests.PromptsTests.SectionsTests
 
             return await Task.FromResult(this.TruncateMessages(messages, tokenizer, maxTokens));
         }
+
+        public string GetMessage(ChatMessage message)
+        {
+            return this.GetMessageText(message);
+        }
     }
 
     public class PromptSectionTests
     {
         [Fact]
-        public async void Test_RenderAsTextAsync_ShouldRender()
+        public async Task Test_RenderAsTextAsync_ShouldRender()
         {
             TestSection section = new();
             Mock<ITurnContext> context = new();
@@ -41,7 +46,7 @@ namespace Microsoft.Teams.AI.Tests.AITests.PromptsTests.SectionsTests
         }
 
         [Fact]
-        public async void Test_RenderAsTextAsync_ShouldTruncate()
+        public async Task Test_RenderAsTextAsync_ShouldTruncate()
         {
             TestSection section = new(8);
             Mock<ITurnContext> context = new();
@@ -52,6 +57,30 @@ namespace Microsoft.Teams.AI.Tests.AITests.PromptsTests.SectionsTests
 
             Assert.Equal("Hello World", rendered.Output);
             Assert.Equal(2, rendered.Length);
+        }
+
+        [Fact]
+        public void Test_GetMessage()
+        {
+            ChatMessage message = new(ChatRole.User)
+            {
+                Content = new List<MessageContentParts>()
+                {
+                    new TextContentPart()
+                    {
+                        Text = "Hello",
+                    },
+
+                    new TextContentPart()
+                    {
+                        Text = "World"
+                    }
+                }
+            };
+
+            string msg = new TestSection().GetMessage(message);
+
+            Assert.Equal("Hello World", msg);
         }
     }
 }

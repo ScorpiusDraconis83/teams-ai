@@ -6,67 +6,132 @@
  * Licensed under the MIT License.
  */
 
-import { TurnContext } from 'botbuilder';
-import { Message, PromptFunctions, PromptTemplate } from '../prompts';
-import { PromptCompletionModel, PromptResponse, PromptResponseStatus } from './PromptCompletionModel';
+import { PromptFunctions, PromptTemplate } from '../prompts';
+import { PromptCompletionModel, PromptCompletionModelEmitter } from './PromptCompletionModel';
+import { PromptResponse } from '../types';
 import { Tokenizer } from '../tokenizers';
+import { TurnContext } from 'botbuilder';
 import { Memory } from '../MemoryFork';
+import EventEmitter from 'events';
+import { StreamingResponse } from '../StreamingResponse';
 
 /**
- * A test model that can be used to test the prompt completion system.
+ * A `PromptCompletionModel` used for testing.
  */
 export class TestModel implements PromptCompletionModel {
+    private readonly _events: PromptCompletionModelEmitter = new EventEmitter() as PromptCompletionModelEmitter;
+    private readonly _handler: (
+        model: TestModel,
+        context: TurnContext,
+        memory: Memory,
+        functions: PromptFunctions,
+        tokenizer: Tokenizer,
+        template: PromptTemplate
+    ) => Promise<PromptResponse<string>>;
+
     /**
-     *
-     * @param status Optional. Status of the prompt response. Defaults to `success`.
-     * @param response Optional. Response to the prompt. Defaults to `{ role: 'assistant', content: 'Hello World' }`.
-     * @param error Optional. Error to return. Defaults to `undefined`.
+     * Creates a new `OpenAIModel` instance.
+     * @param {OpenAIModelOptions} options - Options for configuring the model client.
+     * @param handler
      */
     public constructor(
-        status: PromptResponseStatus = 'success',
-        response: Message = { role: 'assistant', content: 'Hello World' },
-        error?: Error
+        handler: (
+            model: TestModel,
+            context: TurnContext,
+            memory: Memory,
+            functions: PromptFunctions,
+            tokenizer: Tokenizer,
+            template: PromptTemplate
+        ) => Promise<PromptResponse<string>>
     ) {
-        this.status = status;
-        this.response = response;
-        this.error = error;
+        this._handler = handler;
     }
 
     /**
-     * Status of the prompt response.
+     * Events emitted by the model.
+     * @returns {PromptCompletionModelEmitter} An event emitter for the model.
      */
-    public status: PromptResponseStatus;
+    public get events(): PromptCompletionModelEmitter {
+        return this._events;
+    }
 
     /**
-     * Response to the prompt.
+     * Completes a prompt using OpenAI or Azure OpenAI.
+     * @param {TurnContext} context - Current turn context.
+     * @param {Memory} memory - An interface for accessing state values.
+     * @param {PromptFunctions} functions - Functions to use when rendering the prompt.
+     * @param {Tokenizer} tokenizer - Tokenizer to use when rendering the prompt.
+     * @param {PromptTemplate} template - Prompt template to complete.
+     * @returns {Promise<PromptResponse<string>>} A `PromptResponse` with the status and message.
      */
-    public response: Message<string>;
-
-    /**
-     * Error to return.
-     */
-    public error?: Error;
-
-    /**
-     * Completes a prompt.
-     * @param context Current turn context.
-     * @param memory An interface for accessing state values.
-     * @param functions Functions to use when rendering the prompt.
-     * @param tokenizer Tokenizer to use when rendering the prompt.
-     * @param template Prompt template to complete.
-     * @returns A `PromptResponse` with the status and message.
-     */
-    public async completePrompt(
+    public completePrompt(
         context: TurnContext,
         memory: Memory,
         functions: PromptFunctions,
         tokenizer: Tokenizer,
         template: PromptTemplate
     ): Promise<PromptResponse<string>> {
-        if (this.error) {
-            return { status: this.status, input: undefined, error: this.error };
-        } else {
-            return { status: this.status, input: undefined, message: this.response };
-        }
+        return this._handler(this, context, memory, functions, tokenizer, template);
+    }
+
+    public static createTestModel(
+        handler: (
+            model: TestModel,
+            context: TurnContext,
+            memory: Memory,
+            functions: PromptFunctions,
+            tokenizer: Tokenizer,
+            template: PromptTemplate
+        ) => Promise<PromptResponse<string>>
+    ): TestModel {
+        return new TestModel(handler);
+    }
+
+    public static returnResponse(response: PromptResponse<string>, delay: number = 0): TestModel {
+        return new TestModel(async (model, context, memory, functions, tokenizer, template) => {
+            model.events.emit('beforeCompletion', context, memory, functions, tokenizer, template, false);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            const streamer = new StreamingResponse(context);
+            model.events.emit('responseReceived', context, memory, response, streamer);
+            return response;
+        });
+    }
+
+    public static returnContent(content: string, delay: number = 0): TestModel {
+        return TestModel.returnResponse({ status: 'success', message: { role: 'assistant', content } }, delay);
+    }
+
+    public static returnError(error: Error, delay: number = 0): TestModel {
+        return TestModel.returnResponse({ status: 'error', error }, delay);
+    }
+
+    public static returnRateLimited(error: Error, delay: number = 0): TestModel {
+        return TestModel.returnResponse({ status: 'rate_limited', error }, delay);
+    }
+
+    public static streamTextChunks(chunks: string[], delay: number = 0): TestModel {
+        return new TestModel(async (model, context, memory, functions, tokenizer, template) => {
+            model.events.emit('beforeCompletion', context, memory, functions, tokenizer, template, true);
+            let content: string = '';
+            for (let i = 0; i < chunks.length; i++) {
+                await new Promise((resolve) => setTimeout(resolve, delay));
+                const text = chunks[i];
+                content += text;
+                if (i === 0) {
+                    model.events.emit('chunkReceived', context, memory, {
+                        delta: { role: 'assistant', content: text }
+                    });
+                } else {
+                    model.events.emit('chunkReceived', context, memory, { delta: { content: text } });
+                }
+            }
+
+            // Finalize the response.
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            const response: PromptResponse<string> = { status: 'success', message: { role: 'assistant', content } };
+            const streamer = new StreamingResponse(context);
+            model.events.emit('responseReceived', context, memory, response, streamer);
+            return response;
+        });
     }
 }

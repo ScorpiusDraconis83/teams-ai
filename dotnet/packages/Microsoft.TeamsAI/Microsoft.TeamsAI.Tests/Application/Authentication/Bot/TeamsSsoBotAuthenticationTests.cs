@@ -11,7 +11,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
 {
     public class TeamsSsoBotAuthenticationTests
     {
-        internal class MockTeamsSsoBotAuthentication<TState> : TeamsSsoBotAuthentication<TState>
+        internal sealed class MockTeamsSsoBotAuthentication<TState> : TeamsSsoBotAuthentication<TState>
             where TState : TurnState, new()
         {
             public MockTeamsSsoBotAuthentication(Application<TState> app, string name, TeamsSsoSettings settings, TeamsSsoPrompt? mockPrompt = null) : base(app, name, settings, null)
@@ -30,7 +30,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
 
 
         [Fact]
-        public async void Test_RunDialog_BeginNew()
+        public async Task Test_RunDialog_BeginNew()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -49,7 +49,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
         }
 
         [Fact]
-        public async void Test_RunDialog_ContinueExisting()
+        public async Task Test_RunDialog_ContinueExisting()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -71,7 +71,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
 
 
         [Fact]
-        public async void Test_ContinueDialog()
+        public async Task Test_ContinueDialog()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -92,7 +92,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
         }
 
         [Fact]
-        public async void Test_TokenExchangeRouteSelector_NameMatched()
+        public async Task Test_TokenExchangeRouteSelector_NameMatched()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -110,7 +110,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
         }
 
         [Fact]
-        public async void Test_TokenExchangeRouteSelector_NameNotMatch()
+        public async Task Test_TokenExchangeRouteSelector_NameNotMatch()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -128,7 +128,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
         }
 
         [Fact]
-        public async void Test_Dedupe()
+        public async Task Test_Dedupe()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -164,10 +164,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
                 .ReturnsAsync(new DialogTurnResult(DialogTurnStatus.Waiting));
             mockedPrompt
                 .Setup(mock => mock.ContinueDialogAsync(It.IsAny<DialogContext>(), It.IsAny<CancellationToken>()))
-                .Returns(async (DialogContext dc, CancellationToken cancellationToken) =>
-                {
-                    return await dc.EndDialogAsync(new TokenResponse(token: "test token"));
-                });
+                .Returns(async (DialogContext dc, CancellationToken cancellationToken) => await dc.EndDialogAsync(new TokenResponse(token: "test token")));
             return mockedPrompt;
         }
 
@@ -186,8 +183,11 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
 
         private static TurnContext MockTokenExchangeContext(string settingName = "test")
         {
-            JObject activityValue = new();
-            activityValue["id"] = $"{Guid.NewGuid()}-{settingName}";
+            JObject activityValue = new()
+            {
+                ["id"] = $"{Guid.NewGuid()}-{settingName}",
+                ["settingName"] = settingName
+            };
 
             return new TurnContext(new SimpleAdapter(), new Activity()
             {

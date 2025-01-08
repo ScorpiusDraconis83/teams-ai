@@ -19,7 +19,7 @@ provision:
   # Automates the creation of a Teams app registration and saves the App ID to an environment file.
   - uses: teamsApp/create
     with:
-      name: DevOpsBot-${{TEAMSFX_ENV}}
+      name: DevOpsBot${{APP_NAME_SUFFIX}}
     writeToEnvironmentFile:
       teamsAppId: TEAMS_APP_ID
 
@@ -27,7 +27,7 @@ provision:
   # The Bot ID (AAD app client ID) and Bot Password (AAD app client secret) are saved to an environment file.
   - uses: botAadApp/create
     with:
-      name: DevOpsBot-${{TEAMSFX_ENV}}
+      name: DevOpsBot${{APP_NAME_SUFFIX}}
     writeToEnvironmentFile:
       botId: BOT_ID
       botPassword: SECRET_BOT_PASSWORD
@@ -81,3 +81,4 @@ deploy:
     with:
       artifactFolder: bin/Release/net6.0/win-x86/publish
       resourceId: ${{BOT_AZURE_APP_SERVICE_RESOURCE_ID}}
+projectId: 426d5b8a-9a82-40b6-b6a8-7c594361559d

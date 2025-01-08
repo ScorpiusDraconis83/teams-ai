@@ -3,12 +3,21 @@ using Microsoft.Bot.Builder.Integration.AspNet.Core;
 using Microsoft.Bot.Connector.Authentication;
 using Microsoft.Teams.AI;
 using Microsoft.Teams.AI.AI;
-using Microsoft.Teams.AI.AI.OpenAI.Models;
 using Microsoft.Teams.AI.AI.Planners.Experimental;
 using Microsoft.Teams.AI.AI.Planners;
 using OrderBot;
 using OrderBot.Models;
+using OpenAI.Assistants;
+using Azure.Core;
+using Azure.Identity;
+using Microsoft.Teams.AI.Application;
+using OpenAI.Files;
+using OpenAI.VectorStores;
+using OpenAI;
+using Azure.AI.OpenAI;
+using System.ClientModel;
 
+#pragma warning disable OPENAI001
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
@@ -17,16 +26,98 @@ builder.Services.AddHttpContextAccessor();
 
 // Load configuration
 var config = builder.Configuration.Get<ConfigOptions>()!;
-if (config.OpenAI == null || string.IsNullOrEmpty(config.OpenAI.ApiKey))
+var isAzureCredentialsSet = config.Azure != null && !string.IsNullOrEmpty(config.Azure.OpenAIEndpoint);
+var isOpenAICredentialsSet = config.OpenAI != null && !string.IsNullOrEmpty(config.OpenAI.ApiKey);
+
+string? apiKey = null;
+TokenCredential? tokenCredential = null;
+string? endpoint = null;
+string? assistantId = "";
+
+// If both credentials are set then the Azure credentials will be used.
+if (isAzureCredentialsSet)
 {
-    throw new Exception("Missing OpenAI configuration.");
+    endpoint = config.Azure!.OpenAIEndpoint;
+    assistantId = config.Azure.OpenAIAssistantId;
+
+    if (config.Azure!.OpenAIApiKey != string.Empty)
+    {
+        apiKey = config.Azure!.OpenAIApiKey!;
+    } else
+    {
+        // Using managed identity authentication
+        tokenCredential = new DefaultAzureCredential();
+    }
+}
+else if (isOpenAICredentialsSet)
+{
+    apiKey = config.OpenAI!.ApiKey!;
+    assistantId = config.OpenAI.AssistantId;
+}
+else
+{
+    throw new Exception("Missing configurations. Set either Azure or OpenAI configurations");
+
 }
 
 // Missing Assistant ID, create new Assistant
-if (string.IsNullOrEmpty(config.OpenAI.AssistantId))
+if (string.IsNullOrEmpty(assistantId))
 {
-    Console.WriteLine("No Assistant ID configured, creating new Assistant...");
-    string newAssistantId = AssistantsPlanner<AssistantsState>.CreateAssistantAsync(config.OpenAI.ApiKey, null, new()
+    VectorStore store = null!;
+    try
+    {
+        OpenAIClient client;
+        if (endpoint != null)
+        {
+            if (apiKey != null)
+            {
+                client = new AzureOpenAIClient(new Uri(endpoint), new ApiKeyCredential(apiKey));
+            }
+            else
+            {
+                client = new AzureOpenAIClient(new Uri(endpoint), new DefaultAzureCredential());
+            }
+        }
+        else
+        {
+            client = new OpenAIClient(apiKey!);
+        }
+
+        // Create Vector Store
+        var storeClient = client.GetVectorStoreClient();
+        var storeCreationOperation = storeClient.CreateVectorStore(true);
+
+        // Upload file.
+        var fileClient = client.GetOpenAIFileClient();
+        var uploadedFile = fileClient.UploadFile("./assets/menu.pdf", FileUploadPurpose.Assistants);
+
+        // Attach file to vector store
+        var fileAssociation = storeClient.AddFileToVectorStore(store.Id, uploadedFile.Value.Id, true);
+
+        // Poll vector store until file is uploaded
+        var maxPollCount = 5;
+        var pollCount = 1;
+        while (store.FileCounts.Completed == 0 && pollCount <= maxPollCount)
+        {
+            // Wait a second
+            await Task.Delay(1000);
+            store = storeClient.GetVectorStore(store.Id);
+            pollCount += 1;
+        }
+
+        if (store.FileCounts.Completed == 0)
+        {
+            throw new Exception("Unable to attach file to vector store. Timed out");
+        }
+    }
+    catch (Exception e)
+    {
+        throw new Exception("Failed to upload file to vector store.", e.InnerException);
+    }
+
+    var fileSearchTool = new FileSearchToolResources();
+    fileSearchTool.VectorStoreIds.Add(store.Id);
+    AssistantCreationOptions assistantCreationOptions = new()
     {
         Name = "Order Bot",
         Instructions = string.Join("\n", new[]
@@ -36,21 +127,30 @@ if (string.IsNullOrEmpty(config.OpenAI.AssistantId))
             "If the customer doesn't specify the type of pizza, beer, or salad they want ask them.",
             "Verify the order is complete and accurate before placing it with the place_order function."
         }),
-        Tools = new()
+        ToolResources = new ToolResources()
         {
-            new()
-            {
-                Type = Tool.FUNCTION_CALLING_TYPE,
-                Function = new()
-                {
-                    Name = "place_order",
-                    Description = "Creates or updates a food order.",
-                    Parameters = OrderParameters.GetSchema()
-                }
-            }
-        },
-        Model = "gpt-3.5-turbo"
-    }).Result.Id;
+            FileSearch = fileSearchTool
+        }
+    };
+
+    assistantCreationOptions.Tools.Add(new FunctionToolDefinition() { 
+        FunctionName = "place_order", 
+        Description = "Creates or updates a food order.",
+        Parameters = new BinaryData(OrderParameters.GetSchema())
+    });
+    assistantCreationOptions.Tools.Add(new FileSearchToolDefinition());
+
+    string newAssistantId = "";
+    if (apiKey != null)
+    {
+        newAssistantId = AssistantsPlanner<AssistantsState>.CreateAssistantAsync(apiKey, assistantCreationOptions, "gpt-4o-mini", endpoint).Result.Id;
+    } 
+    else
+    {
+        // use token credential for authentication
+        newAssistantId = AssistantsPlanner<AssistantsState>.CreateAssistantAsync(tokenCredential!, assistantCreationOptions, "gpt-4o-mini", endpoint!).Result.Id;
+    }
+
     Console.WriteLine($"Created a new assistant with an ID of: {newAssistantId}");
     Console.WriteLine("Copy and save above ID, and set `OpenAI:AssistantId` in appsettings.Development.json.");
     Console.WriteLine("Press any key to exit.");
@@ -69,23 +169,44 @@ builder.Services.AddSingleton<BotFrameworkAuthentication, ConfigurationBotFramew
 // Create the Cloud Adapter with error handling enabled.
 // Note: some classes expect a BotAdapter and some expect a BotFrameworkHttpAdapter, so
 // register the same adapter instance for all types.
-builder.Services.AddSingleton<CloudAdapter, AdapterWithErrorHandler>();
-builder.Services.AddSingleton<IBotFrameworkHttpAdapter>(sp => sp.GetService<CloudAdapter>()!);
-builder.Services.AddSingleton<BotAdapter>(sp => sp.GetService<CloudAdapter>()!);
+builder.Services.AddSingleton<TeamsAdapter, AdapterWithErrorHandler>();
+builder.Services.AddSingleton<IBotFrameworkHttpAdapter>(sp => sp.GetService<TeamsAdapter>()!);
+builder.Services.AddSingleton<BotAdapter>(sp => sp.GetService<TeamsAdapter>()!);
 
 builder.Services.AddSingleton<IStorage, MemoryStorage>();
-builder.Services.AddSingleton(_ => new AssistantsPlannerOptions(config.OpenAI.ApiKey, config.OpenAI.AssistantId));
+builder.Services.AddSingleton(_ => {
+    if (apiKey != null)
+    {
+        return new AssistantsPlannerOptions(apiKey, assistantId, endpoint);
+    } else if (tokenCredential != null)
+    {
+        return new AssistantsPlannerOptions(tokenCredential, assistantId, endpoint);
+    } else
+    {
+        throw new ArgumentException("The `apiKey` or `tokenCredential` needs to be set");
+    }
+});
 
 // Create the Application.
 builder.Services.AddTransient<IBot>(sp =>
 {
     ILoggerFactory loggerFactory = sp.GetService<ILoggerFactory>()!;
     IPlanner<AssistantsState> planner = new AssistantsPlanner<AssistantsState>(sp.GetService<AssistantsPlannerOptions>()!, loggerFactory);
+
+    TeamsAdapter adapter = sp.GetService<TeamsAdapter>()!;
+    TeamsAttachmentDownloaderOptions fileDownloaderOptions = new(config.BOT_ID!, adapter);
+
+    IInputFileDownloader<AssistantsState> teamsAttachmentDownloader = new TeamsAttachmentDownloader<AssistantsState>(fileDownloaderOptions);
+
     ApplicationOptions<AssistantsState> applicationOptions = new()
     {
-        AI = new AIOptions<AssistantsState>(planner),
+        AI = new AIOptions<AssistantsState>(planner) { AllowLooping = true },
         Storage = sp.GetService<IStorage>(),
-        LoggerFactory = loggerFactory
+        LoggerFactory = loggerFactory,
+        FileDownloaders = new List<IInputFileDownloader<AssistantsState>>() { teamsAttachmentDownloader },
+        LongRunningMessages = true,
+        Adapter = sp.GetService<TeamsAdapter>(),
+        BotAppId = config.BOT_ID
     };
 
     Application<AssistantsState> app = new(applicationOptions);
@@ -111,3 +232,4 @@ app.UseRouting();
 app.MapControllers();
 
 app.Run();
+#pragma warning restore OPENAI001

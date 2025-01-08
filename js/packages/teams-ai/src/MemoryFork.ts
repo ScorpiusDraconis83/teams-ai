@@ -20,7 +20,6 @@ export interface Memory {
     /**
      * Deletes a value from the memory.
      * @param path Path to the value to delete in the form of `[scope].property`. If scope is omitted, the value is deleted from the temporary scope.
-     * @returns True if the value was deleted, false otherwise.
      * @throws Error if the path is invalid.
      */
     deleteValue(path: string): void;
@@ -34,6 +33,7 @@ export interface Memory {
 
     /**
      * Retrieves a value from the memory.
+     * @template TValue Type of the value to retrieve.
      * @param path Path to the value to retrieve in the form of `[scope].property`. If scope is omitted, the value is retrieved from the temporary scope.
      * @returns The value or undefined if not found.
      */
@@ -59,7 +59,7 @@ export class MemoryFork implements Memory {
 
     /**
      * Creates a new `MemoryFork` instance.
-     * @param memory Memory to fork.
+     * @param {Memory} memory Memory to fork.
      */
     public constructor(memory: Memory) {
         this._memory = memory;
@@ -69,11 +69,14 @@ export class MemoryFork implements Memory {
      * Deletes a value from the memory.
      * @remarks
      * Only forked values will be deleted.
-     * @param path Path to the value to delete in the form of `[scope].property`. If scope is omitted, the value is deleted from the temporary scope.
+     * @param {string} path Path to the value to delete in the form of `[scope].property`. If scope is omitted, the value is deleted from the temporary scope.
      */
     public deleteValue(path: string): void {
         const { scope, name } = this.getScopeAndName(path);
-        if (this._fork.hasOwnProperty(scope) && this._fork[scope].hasOwnProperty(name)) {
+        if (
+            Object.prototype.hasOwnProperty.call(this._fork, scope) &&
+            Object.prototype.hasOwnProperty.call(this._fork[scope], name)
+        ) {
             delete this._fork[scope][name];
         }
     }
@@ -82,13 +85,13 @@ export class MemoryFork implements Memory {
      * Checks if a value exists in the memory.
      * @remarks
      * The forked memory is checked first, then the original memory.
-     * @param path Path to the value to check in the form of `[scope].property`. If scope is omitted, the value is checked in the temporary scope.
-     * @returns True if the value exists, false otherwise.
+     * @param {string} path Path to the value to check in the form of `[scope].property`. If scope is omitted, the value is checked in the temporary scope.
+     * @returns {boolean} True if the value exists, false otherwise.
      */
     public hasValue(path: string): boolean {
         const { scope, name } = this.getScopeAndName(path);
-        if (this._fork.hasOwnProperty(scope)) {
-            return this._fork[scope].hasOwnProperty(name);
+        if (Object.prototype.hasOwnProperty.call(this._fork, scope)) {
+            return Object.prototype.hasOwnProperty.call(this._fork[scope], name);
         } else {
             return this._memory.hasValue(path);
         }
@@ -96,15 +99,16 @@ export class MemoryFork implements Memory {
 
     /**
      * Retrieves a value from the memory.
+     * @template TValue Type of the value to retrieve.
      * @remarks
      * The forked memory is checked first, then the original memory.
-     * @param path Path to the value to retrieve in the form of `[scope].property`. If scope is omitted, the value is retrieved from the temporary scope.
-     * @returns The value or undefined if not found.
+     * @param {string} path Path to the value to retrieve in the form of `[scope].property`. If scope is omitted, the value is retrieved from the temporary scope.
+     * @returns {TValue | undefined} The value or undefined if not found.
      */
     public getValue<TValue = unknown>(path: string): TValue {
         const { scope, name } = this.getScopeAndName(path);
-        if (this._fork.hasOwnProperty(scope)) {
-            if (this._fork[scope].hasOwnProperty(name)) {
+        if (Object.prototype.hasOwnProperty.call(this._fork, scope)) {
+            if (Object.prototype.hasOwnProperty.call(this._fork[scope], name)) {
                 return this._fork[scope][name] as TValue;
             }
         }
@@ -116,12 +120,12 @@ export class MemoryFork implements Memory {
      * Assigns a value to the memory.
      * @remarks
      * The value is assigned to the forked memory.
-     * @param path Path to the value to assign in the form of `[scope].property`. If scope is omitted, the value is assigned to the temporary scope.
-     * @param value Value to assign.
+     * @param {string} path Path to the value to assign in the form of `[scope].property`. If scope is omitted, the value is assigned to the temporary scope.
+     * @param {unknown} value Value to assign.
      */
     public setValue(path: string, value: unknown): void {
         const { scope, name } = this.getScopeAndName(path);
-        if (!this._fork.hasOwnProperty(scope)) {
+        if (!Object.prototype.hasOwnProperty.call(this._fork, scope)) {
             this._fork[scope] = {};
         }
 
@@ -129,8 +133,9 @@ export class MemoryFork implements Memory {
     }
 
     /**
-     * @param path Path to the value to check in the form of `[scope].property`. If scope is omitted, the value is checked in the temporary scope.
      * @private
+     * @param {string} path Path to the value to check in the form of `[scope].property`. If scope is omitted, the value is checked in the temporary scope.
+     * @returns {Record<string, string>} Scope and name.
      */
     private getScopeAndName(path: string): { scope: string; name: string } {
         // Get variable scope and name

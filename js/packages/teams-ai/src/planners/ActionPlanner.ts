@@ -6,18 +6,21 @@
  * Licensed under the MIT License.
  */
 
-import { Planner, Plan } from './Planner';
-import { TurnState } from '../TurnState';
 import { TurnContext } from 'botbuilder';
+
 import { AI } from '../AI';
-import { PromptTemplate, PromptManager } from '../prompts';
-import { PromptCompletionModel, PromptResponse } from '../models';
-import { PromptResponseValidator } from '../validators';
-import { Memory } from '../MemoryFork';
-import { LLMClient } from './LLMClient';
-import { Tokenizer } from '../tokenizers';
-import { Utilities } from '../Utilities';
 import { DefaultAugmentation } from '../augmentations';
+import { Memory } from '../MemoryFork';
+import { PromptCompletionModel, PromptCompletionModelResponseReceivedEvent } from '../models';
+import { PromptTemplate, PromptManager } from '../prompts';
+import { Tokenizer } from '../tokenizers';
+import { TurnState } from '../TurnState';
+import { Utilities } from '../Utilities';
+import { PromptResponse } from '../types';
+import { PromptResponseValidator } from '../validators';
+
+import { LLMClient } from './LLMClient';
+import { Planner, Plan } from './Planner';
 
 /**
  * Factory function used to create a prompt template.
@@ -67,7 +70,7 @@ export interface ActionPlannerOptions<TState extends TurnState = TurnState> {
     /**
      * Optional tokenizer to use.
      * @remarks
-     * If not specified, a new `GPT3Tokenizer` instance will be created.
+     * If not specified, a new `GPTTokenizer` instance will be created.
      */
     tokenizer?: Tokenizer;
 
@@ -77,6 +80,26 @@ export interface ActionPlannerOptions<TState extends TurnState = TurnState> {
      * The default value is false.
      */
     logRepairs?: boolean;
+
+    /**
+     * Optional message to send a client at the start of a streaming response.
+     */
+    startStreamingMessage?: string;
+
+    /**
+     * Optional handler to run when a stream is about to conclude.
+     */
+    endStreamHandler?: PromptCompletionModelResponseReceivedEvent;
+
+    /**
+     * If true, the feedback loop will be enabled for streaming responses.
+     */
+    enableFeedbackLoop?: boolean;
+
+    /**
+     * The feedback loop type.
+     */
+    feedbackLoopType?: 'default' | 'custom';
 }
 
 /**
@@ -103,10 +126,12 @@ export class ActionPlanner<TState extends TurnState = TurnState> implements Plan
     private readonly _options: ActionPlannerOptions<TState>;
     private readonly _promptFactory: ActionPlannerPromptFactory<TState>;
     private readonly _defaultPrompt?: string;
+    private _enableFeedbackLoop: boolean | undefined;
+    private _feedbackLoopType?: 'default' | 'custom';
 
     /**
      * Creates a new `ActionPlanner` instance.
-     * @param options Options used to configure the planner.
+     * @param {ActionPlannerOptions<TState>} options Options used to configure the planner.
      */
     public constructor(options: ActionPlannerOptions<TState>) {
         this._options = Object.assign(
@@ -144,10 +169,10 @@ export class ActionPlanner<TState extends TurnState = TurnState> implements Plan
      * there is no work to be performed.
      *
      * The planner should take the users input from `state.temp.input`.
-     * @param context Context for the current turn of conversation.
-     * @param state Application state for the current turn of conversation.
-     * @param ai The AI system that is generating the plan.
-     * @returns The plan that was generated.
+     * @param {TurnContext} context Context for the current turn of conversation.
+     * @param {TState} state Application state for the current turn of conversation.
+     * @param {AI<TState>} ai The AI system that is generating the plan.
+     * @returns {Promise<Plan>} The plan that was generated.
      */
     public async beginTask(context: TurnContext, state: TState, ai: AI<TState>): Promise<Plan> {
         return await this.continueTask(context, state, ai);
@@ -162,10 +187,10 @@ export class ActionPlanner<TState extends TurnState = TurnState> implements Plan
      * to be performed.
      *
      * The output from the last plan step that was executed is passed to the planner via `state.temp.input`.
-     * @param context Context for the current turn of conversation.
-     * @param state Application state for the current turn of conversation.
-     * @param ai The AI system that is generating the plan.
-     * @returns The plan that was generated.
+     * @param {TurnContext} context - Context for the current turn of conversation.
+     * @param {TState} state - Application state for the current turn of conversation.
+     * @param {AI<TState>} ai - The AI system that is generating the plan.
+     * @returns {Promise<Plan>} The plan that was generated.
      */
     public async continueTask(context: TurnContext, state: TState, ai: AI<TState>): Promise<Plan> {
         // Identify the prompt to use
@@ -174,14 +199,29 @@ export class ActionPlanner<TState extends TurnState = TurnState> implements Plan
         // Identify the augmentation to use
         const augmentation = template.augmentation ?? new DefaultAugmentation();
 
+        if (ai.enableFeedbackLoop != null) {
+            this._enableFeedbackLoop = ai.enableFeedbackLoop;
+
+            if (ai.feedbackLoopType) {
+                this._feedbackLoopType = ai.feedbackLoopType;
+            }
+        }
+
         // Complete prompt
         const result = await this.completePrompt(context, state, template, augmentation);
         if (result.status != 'success') {
             throw result.error!;
         }
 
-        // Return plan
-        return await augmentation.createPlanFromResponse(context, state, result);
+        // Check to see if we have a response
+        // - when a streaming response is used the response message will be undefined.
+        if (result.message) {
+            // Return plan
+            return await augmentation.createPlanFromResponse(context, state, result);
+        } else {
+            // Return an empty plan
+            return { type: 'plan', commands: [] };
+        }
     }
 
     /**
@@ -195,11 +235,11 @@ export class ActionPlanner<TState extends TurnState = TurnState> implements Plan
      * a message containing a JSON object. If no validator is used, the response will be a
      * message containing the response text as a string.
      * @template TContent Optional. Type of message content returned for a 'success' response. The `response.message.content` field will be of type TContent. Defaults to `string`.     * @param context Context for the current turn of conversation.
-     * @param context
-     * @param memory A memory interface used to access state variables (the turn state object implements this interface.)
-     * @param prompt Name of the prompt to use or a prompt template.
-     * @param validator Optional. A validator to use to validate the response returned by the model.
-     * @returns The result of the LLM call.
+     * @param {TurnContext} context - Context for the current turn of conversation.
+     * @param {Memory} memory A memory interface used to access state variables (the turn state object implements this interface.)
+     * @param {string | PromptTemplate} prompt - Name of the prompt to use or a prompt template.
+     * @param {PromptResponseValidator<TContent>} validator - Optional. A validator to use to validate the response returned by the model.
+     * @returns {Promise<PromptResponse<TContent>>} The result of the LLM call.
      */
     public async completePrompt<TContent = string>(
         context: TurnContext,
@@ -243,7 +283,11 @@ export class ActionPlanner<TState extends TurnState = TurnState> implements Plan
             tokenizer: this._options.tokenizer,
             max_history_messages: this.prompts.options.max_history_messages,
             max_repair_attempts: this._options.max_repair_attempts,
-            logRepairs: this._options.logRepairs
+            logRepairs: this._options.logRepairs,
+            startStreamingMessage: this._options.startStreamingMessage,
+            endStreamHandler: this._options.endStreamHandler,
+            enableFeedbackLoop: this._enableFeedbackLoop,
+            feedbackLoopType: this._feedbackLoopType
         });
 
         // Complete prompt
@@ -252,11 +296,8 @@ export class ActionPlanner<TState extends TurnState = TurnState> implements Plan
 
     /**
      * Creates a semantic function that can be registered with the apps prompt manager.
-     * @param {string} name The name of the semantic function.
-     * @param {PromptTemplate} template The prompt template to use.
-     * @param {Partial<AIOptions<TState>>} options Optional. Override options for the prompt. If omitted, the AI systems configured options will be used.
-     * @param prompt
-     * @param validator
+     * @param {string | PromptTemplate} prompt - The name of the prompt to use.
+     * @param {PromptResponseValidator<any>} validator - Optional. A validator to use to validate the response returned by the model.
      * @remarks
      * Semantic functions are functions that make model calls and return their results as template
      * parameters to other prompts. For example, you could define a semantic function called

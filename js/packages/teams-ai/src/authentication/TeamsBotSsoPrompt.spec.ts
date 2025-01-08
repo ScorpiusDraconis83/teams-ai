@@ -59,7 +59,6 @@ describe('TeamsSsoPrompt', () => {
      * }
      */
     const ssoToken =
-        // eslint-disable-next-line no-secrets/no-secrets
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0ZXN0X2F1ZGllbmNlIiwiaXNzIjoiaHR0cHM6Ly9sb2dpbi5taWNyb3NvZnRvbmxpbmUuY29tL3Rlc3RfYWFkX2lkL3YyLjAiLCJpYXQiOjE1MzcyMzEwNDgsIm5iZiI6MTUzNzIzMTA0OCwiZXhwIjoxNTM3MjM0OTQ4LCJhaW8iOiJ0ZXN0X2FpbyIsIm5hbWUiOiJNT0RTIFRvb2xraXQgU0RLIFVuaXQgVGVzdCIsIm9pZCI6IjExMTExMTExLTIyMjItMzMzMy00NDQ0LTU1NTU1NTU1NTU1NSIsInByZWZlcnJlZF91c2VybmFtZSI6InRlc3RAbWljcm9zb2Z0LmNvbSIsInJoIjoidGVzdF9yaCIsInNjcCI6ImFjY2Vzc19hc191c2VyIiwic3ViIjoidGVzdF9zdWIiLCJ0aWQiOiJ0ZXN0X3RlbmFudF9pZCIsInV0aSI6InRlc3RfdXRpIiwidmVyIjoiMi4wIn0.SshbL1xuE1aNZD5swrWOQYgTR9QCNXkZqUebautBvKM';
     const tokenExpiration = '2023-01-01T00:00:00.000Z';
     const timeoutValue = 50;
@@ -293,8 +292,9 @@ describe('TeamsSsoPrompt', () => {
 
     /**
      *
-     * @param type
-     * @param activity
+     * @param {ActivityTypes} type - The activity type.
+     * @param {Partial<Activity>} activity - The activity to use for the turn context.
+     * @returns {Partial<Activity>} - The created reply activity.
      */
     function createReply(type: ActivityTypes, activity: Partial<Activity>): Partial<Activity> {
         return {
@@ -316,7 +316,7 @@ describe('TeamsSsoPrompt', () => {
 
     /**
      *
-     * @param activity
+     * @param {Partial<Activity>} activity - The activity to assert.
      */
     function assertTeamsSsoOauthCardActivity(activity: Partial<Activity>): void {
         assert.equal(Array.isArray(activity.attachments), true);
@@ -337,8 +337,8 @@ describe('TeamsSsoPrompt', () => {
 
     /**
      *
-     * @param adapter
-     * @param activity
+     * @param {TestAdapter} adapter - The adapter to use for the turn context.
+     * @param {Partial<Activity>} activity - The activity to use for the turn context.
      */
     function mockTeamsSendsTokenExchangeInvokeActivityWithSsoToken(
         adapter: TestAdapter,
@@ -355,9 +355,10 @@ describe('TeamsSsoPrompt', () => {
 
     /**
      * Initialize dialogs, adds teamsBotSsoPrompt in dialog set and initialize testAdapter for test case.
-     * @param timeout_value positive number set to teamsSsoPromptSettings.timeout property
-     * @param endOnInvalidMessage boolean value set to teamsSsoPromptSettings.endOnInvalidMessage property
-     * @param channelId value set to dialog context activity channel. Defaults to `Channels.MSteams`.
+     * @param {number} timeout_value - A positive number set to teamsSsoPromptSettings.timeout property
+     * @param {boolean} endOnInvalidMessage - A boolean value set to teamsSsoPromptSettings.endOnInvalidMessage property
+     * @param {Channels} channelId - A value set to dialog context activity channel. Defaults to `Channels.MSteams`.
+     @returns {Promise<TestAdapter>} - The Test Adapter
      */
     async function initializeTestEnv(
         timeout_value?: number,

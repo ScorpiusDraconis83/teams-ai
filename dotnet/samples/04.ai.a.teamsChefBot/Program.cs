@@ -7,6 +7,8 @@ using Microsoft.Teams.AI.AI.Prompts;
 using Microsoft.Teams.AI.State;
 using Microsoft.Teams.AI;
 using TeamsChefBot;
+using Microsoft.KernelMemory;
+using Microsoft.Teams.AI.AI.DataSources;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -26,15 +28,16 @@ builder.Services.AddSingleton<BotFrameworkAuthentication, ConfigurationBotFramew
 // Create the Cloud Adapter with error handling enabled.
 // Note: some classes expect a BotAdapter and some expect a BotFrameworkHttpAdapter, so
 // register the same adapter instance for all types.
-builder.Services.AddSingleton<CloudAdapter, AdapterWithErrorHandler>();
-builder.Services.AddSingleton<IBotFrameworkHttpAdapter>(sp => sp.GetService<CloudAdapter>()!);
-builder.Services.AddSingleton<BotAdapter>(sp => sp.GetService<CloudAdapter>()!);
+builder.Services.AddSingleton<TeamsAdapter, AdapterWithErrorHandler>();
+builder.Services.AddSingleton<IBotFrameworkHttpAdapter>(sp => sp.GetService<TeamsAdapter>()!);
+builder.Services.AddSingleton<BotAdapter>(sp => sp.GetService<TeamsAdapter>()!);
 
 builder.Services.AddSingleton<IStorage, MemoryStorage>();
 
 // Create AI Model
 if (!string.IsNullOrEmpty(config.OpenAI?.ApiKey))
 {
+    // Create OpenAI Model
     builder.Services.AddSingleton<OpenAIModel>(sp => new(
         new OpenAIModelOptions(config.OpenAI.ApiKey, "gpt-3.5-turbo")
         {
@@ -42,9 +45,19 @@ if (!string.IsNullOrEmpty(config.OpenAI?.ApiKey))
         },
         sp.GetService<ILoggerFactory>()
     ));
+
+    // Create Kernel Memory Serverless instance using OpenAI embeddings API
+    builder.Services.AddSingleton<IKernelMemory>((sp) =>
+    {
+        return new KernelMemoryBuilder()
+            .WithOpenAIDefaults(config.OpenAI.ApiKey)
+            .WithSimpleFileStorage()
+            .Build<MemoryServerless>();
+    });
 }
 else if (!string.IsNullOrEmpty(config.Azure?.OpenAIApiKey) && !string.IsNullOrEmpty(config.Azure.OpenAIEndpoint))
 {
+    // Create Azure OpenAI Model
     builder.Services.AddSingleton<OpenAIModel>(sp => new(
         new AzureOpenAIModelOptions(
             config.Azure.OpenAIApiKey,
@@ -56,11 +69,35 @@ else if (!string.IsNullOrEmpty(config.Azure?.OpenAIApiKey) && !string.IsNullOrEm
         },
         sp.GetService<ILoggerFactory>()
     ));
+
+    // Create Kernel Memory Serverless instance using AzureOpenAI embeddings API
+    builder.Services.AddSingleton<IKernelMemory>((sp) =>
+    {
+        AzureOpenAIConfig azureConfig = new()
+        {
+            Auth = AzureOpenAIConfig.AuthTypes.APIKey,
+            APIKey = config.Azure.OpenAIApiKey,
+            Endpoint = config.Azure.OpenAIEndpoint,
+            APIType = AzureOpenAIConfig.APITypes.EmbeddingGeneration,
+            Deployment = "text-embedding-ada-002" // Update this to the deployment you want to use
+        };
+
+        return new KernelMemoryBuilder()
+            .WithAzureOpenAITextEmbeddingGeneration(azureConfig)
+            .WithAzureOpenAITextGeneration(azureConfig)
+            .WithSimpleFileStorage()
+            .Build<MemoryServerless>();
+    });
 }
 else
 {
     throw new Exception("please configure settings for either OpenAI or Azure");
 }
+
+builder.Services.AddSingleton<IDataSource>((sp) =>
+{
+    return new KernelMemoryDataSource("teams-ai", sp.GetService<IKernelMemory>()!);
+});
 
 // Create the bot as transient. In this case the ASP Controller is expecting an IBot.
 builder.Services.AddTransient<IBot>(sp =>
@@ -73,6 +110,8 @@ builder.Services.AddTransient<IBot>(sp =>
     {
         PromptFolder = "./Prompts"
     });
+
+    prompts.AddDataSource("teams-ai", sp.GetService<IDataSource>()!);
 
     // Create ActionPlanner
     ActionPlanner<TurnState> planner = new(

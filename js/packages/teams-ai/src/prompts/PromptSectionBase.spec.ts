@@ -1,11 +1,11 @@
 import { strict as assert } from 'assert';
-import { PromptSectionBase } from './PromptSectionBase';
 import { TestAdapter, TurnContext } from 'botbuilder';
-import { TestPromptManager } from './TestPromptManager';
-import { GPT3Tokenizer, Tokenizer } from '../tokenizers';
-import { TestTurnState } from '../TestTurnState';
+import { TestPromptManager } from '../internals/testing/TestPromptManager';
+import { TestTurnState } from '../internals/testing/TestTurnState';
+import { GPTTokenizer, Tokenizer } from '../tokenizers';
 import { TurnState } from '../TurnState';
 import { PromptFunctions } from './PromptFunctions';
+import { PromptSectionBase } from './PromptSectionBase';
 import { RenderedPromptSection } from './PromptSection';
 import { Message } from './Message';
 
@@ -44,7 +44,7 @@ export class MultiTestSection extends PromptSectionBase {
 describe('PromptSectionBase', () => {
     const adapter = new TestAdapter();
     const functions = new TestPromptManager();
-    const tokenizer = new GPT3Tokenizer();
+    const tokenizer = new GPTTokenizer();
 
     describe('constructor', () => {
         it('should create a TestSection', () => {

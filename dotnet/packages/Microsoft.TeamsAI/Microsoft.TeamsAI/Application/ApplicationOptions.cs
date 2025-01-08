@@ -2,6 +2,7 @@
 using Microsoft.Teams.AI.State;
 using Microsoft.Extensions.Logging;
 using Microsoft.Bot.Builder;
+using Microsoft.Teams.AI.Application;
 
 namespace Microsoft.Teams.AI
 {
@@ -13,18 +14,18 @@ namespace Microsoft.Teams.AI
         where TState : TurnState, new()
     {
         /// <summary>
-        /// Optional. Bot adapter being used.
+        /// Optional. Teams Bot adapter being used.
         /// </summary>
         /// <remarks>
-        /// If using the LongRunningMessages option or calling the ContinueConversationAsync method, this property is required.
+        /// If using the <see cref="ApplicationOptions{TState}.LongRunningMessages"/> option, calling the <see cref="CloudAdapterBase.ContinueConversationAsync(string, Bot.Schema.Activity, BotCallbackHandler, CancellationToken)"/> method, or configuring user authentication, this property is required.
         /// </remarks>
-        public BotAdapter? Adapter { get; set; }
+        public TeamsAdapter? Adapter { get; set; }
 
         /// <summary>
         /// Optional. Application ID of the bot.
         /// </summary>
         /// <remarks>
-        /// If using the <see cref="ApplicationOptions{TState}.LongRunningMessages"/> option or calling the <see cref="CloudAdapterBase.ContinueConversationAsync(string, Bot.Schema.Activity, BotCallbackHandler, CancellationToken)"/> method, this property is required.
+        /// If using the <see cref="ApplicationOptions{TState}.LongRunningMessages"/> option, calling the <see cref="CloudAdapterBase.ContinueConversationAsync(string, Bot.Schema.Activity, BotCallbackHandler, CancellationToken)"/> method, or configuring user authentication, this property is required.
         /// </remarks>
         public string? BotAppId { get; set; }
 
@@ -52,6 +53,11 @@ namespace Microsoft.Teams.AI
         /// Optional. Factory used to create a custom turn state instance.
         /// </summary>
         public Func<TState>? TurnStateFactory { get; set; }
+
+        /// <summary>
+        /// Optional. Array of input file download plugins to use.
+        /// </summary>
+        public IList<IInputFileDownloader<TState>>? FileDownloaders { get; set; }
 
         /// <summary>
         /// Optional. Logger factory that will be used in this application.

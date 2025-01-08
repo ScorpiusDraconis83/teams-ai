@@ -3,11 +3,15 @@ using Microsoft.Bot.Builder.Integration.AspNet.Core;
 using Microsoft.Bot.Connector.Authentication;
 using Microsoft.Teams.AI;
 using Microsoft.Teams.AI.AI;
-using Microsoft.Teams.AI.AI.OpenAI.Models;
 using Microsoft.Teams.AI.AI.Planners.Experimental;
 using Microsoft.Teams.AI.AI.Planners;
-
 using MathBot;
+using OpenAI.Assistants;
+using Azure.Core;
+using Azure.Identity;
+using System.Runtime.CompilerServices;
+
+#pragma warning disable OPENAI001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,28 +21,63 @@ builder.Services.AddHttpContextAccessor();
 
 // Load configuration
 var config = builder.Configuration.Get<ConfigOptions>()!;
-if (config.OpenAI == null || string.IsNullOrEmpty(config.OpenAI.ApiKey))
+var isAzureCredentialsSet = config.Azure != null && !string.IsNullOrEmpty(config.Azure.OpenAIEndpoint);
+var isOpenAICredentialsSet = config.OpenAI != null && !string.IsNullOrEmpty(config.OpenAI.ApiKey);
+
+string? apiKey = null;
+TokenCredential? tokenCredential = null;
+string? endpoint = null;
+string? assistantId = "";
+
+// If both credentials are set then the Azure credentials will be used.
+if (isAzureCredentialsSet)
 {
-    throw new Exception("Missing OpenAI configuration.");
+    endpoint = config.Azure!.OpenAIEndpoint;
+    assistantId = config.Azure.OpenAIAssistantId;
+
+    if (config.Azure!.OpenAIApiKey != string.Empty)
+    {
+        apiKey = config.Azure!.OpenAIApiKey!;
+    }
+    else
+    {
+        // Using managed identity authentication
+        tokenCredential = new DefaultAzureCredential();
+    }
+}
+else if (isOpenAICredentialsSet)
+{
+    apiKey = config.OpenAI!.ApiKey!;
+    assistantId = config.OpenAI.AssistantId;
+}
+else
+{
+    throw new Exception("Missing configurations. Set either Azure or OpenAI configurations");
+
 }
 
 // Missing Assistant ID, create new Assistant
-if (string.IsNullOrEmpty(config.OpenAI.AssistantId))
+if (string.IsNullOrEmpty(assistantId))
 {
-    Console.WriteLine("No Assistant ID configured, creating new Assistant...");
-    string newAssistantId = AssistantsPlanner<AssistantsState>.CreateAssistantAsync(config.OpenAI.ApiKey, null, new()
+    AssistantCreationOptions assistantCreationOptions = new()
     {
         Name = "Math Tutor",
-        Instructions = "You are a personal math tutor. Write and run code to answer math questions.",
-        Tools = new()
-        {
-            new()
-            {
-                Type = Tool.CODE_INTERPRETER_TYPE
-            }
-        },
-        Model = "gpt-3.5-turbo"
-    }).Result.Id;
+        Instructions = "You are a personal math tutor. Write and run code to answer math questions."
+    };
+
+    assistantCreationOptions.Tools.Add(new CodeInterpreterToolDefinition());
+
+    string newAssistantId = "";
+    if (apiKey != null)
+    {
+        newAssistantId = AssistantsPlanner<AssistantsState>.CreateAssistantAsync(apiKey, assistantCreationOptions, "gpt-4o-mini", endpoint).Result.Id;
+    }
+    else
+    {
+        // use token credential for authentication
+        newAssistantId = AssistantsPlanner<AssistantsState>.CreateAssistantAsync(tokenCredential!, assistantCreationOptions, "gpt-4o-mini", endpoint!).Result.Id;
+    }
+
     Console.WriteLine($"Created a new assistant with an ID of: {newAssistantId}");
     Console.WriteLine("Copy and save above ID, and set `OpenAI:AssistantId` in appsettings.Development.json.");
     Console.WriteLine("Press any key to exit.");
@@ -57,12 +96,25 @@ builder.Services.AddSingleton<BotFrameworkAuthentication, ConfigurationBotFramew
 // Create the Cloud Adapter with error handling enabled.
 // Note: some classes expect a BotAdapter and some expect a BotFrameworkHttpAdapter, so
 // register the same adapter instance for all types.
-builder.Services.AddSingleton<CloudAdapter, AdapterWithErrorHandler>();
-builder.Services.AddSingleton<IBotFrameworkHttpAdapter>(sp => sp.GetService<CloudAdapter>()!);
-builder.Services.AddSingleton<BotAdapter>(sp => sp.GetService<CloudAdapter>()!);
+builder.Services.AddSingleton<TeamsAdapter, AdapterWithErrorHandler>();
+builder.Services.AddSingleton<IBotFrameworkHttpAdapter>(sp => sp.GetService<TeamsAdapter>()!);
+builder.Services.AddSingleton<BotAdapter>(sp => sp.GetService<TeamsAdapter>()!);
 
 builder.Services.AddSingleton<IStorage, MemoryStorage>();
-builder.Services.AddSingleton(_ => new AssistantsPlannerOptions(config.OpenAI.ApiKey, config.OpenAI.AssistantId));
+builder.Services.AddSingleton(_ => {
+    if (apiKey != null)
+    {
+        return new AssistantsPlannerOptions(apiKey, assistantId, endpoint);
+    }
+    else if (tokenCredential != null)
+    {
+        return new AssistantsPlannerOptions(tokenCredential, assistantId, endpoint);
+    }
+    else
+    {
+        throw new ArgumentException("The `apiKey` or `tokenCredential` needs to be set");
+    }
+});
 
 // Create the Application.
 builder.Services.AddTransient<IBot>(sp =>
@@ -99,3 +151,5 @@ app.UseRouting();
 app.MapControllers();
 
 app.Run();
+
+#pragma warning restore OPENAI001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.

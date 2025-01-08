@@ -6,13 +6,15 @@
  * Licensed under the MIT License.
  */
 
+import { ActionCall } from '../types';
+
 /**
  * A message object sent to or received from an LLM.
  * @param TContent Optional. Type of the message content. Defaults to `string`
  */
 export interface Message<TContent = string> {
     /**
-     * The messages role. Typically 'system', 'user', 'assistant', 'function'.
+     * The messages role. Typically 'system', 'user', 'assistant', 'tool', 'function'.
      */
     role: string;
 
@@ -27,9 +29,24 @@ export interface Message<TContent = string> {
     function_call?: FunctionCall;
 
     /**
+     * The context used for the message.
+     */
+    context?: MessageContext;
+
+    /**
      * Optional. Name of the function that was called.
      */
     name?: string;
+
+    /**
+     * Optional. The action or tool to be called by the model when using 'tools' augmentation. In OpenAI, this is the tool_calls property returned from the model.
+     */
+    action_calls?: ActionCall[];
+
+    /**
+     * Optional. The id of the action called.
+     */
+    action_call_id?: string | undefined;
 }
 
 /**
@@ -71,4 +88,41 @@ export interface ImageContentPart {
      * The URL of the image.
      */
     image_url: string | { url: string };
+}
+
+/**
+ * Citations returned by the model.
+ */
+export interface Citation {
+    /**
+     * The content of the citation.
+     */
+    content: string;
+
+    /**
+     * The title of the citation.
+     */
+    title: string | null;
+
+    /**
+     * The URL of the citation.
+     */
+    url: string | null;
+
+    /**
+     * The filepath of the document.
+     */
+    filepath: string | null;
+}
+
+export interface MessageContext {
+    /**
+     * Citations used in the message.
+     */
+    citations: Citation[];
+
+    /**
+     * The intent of the message (what the user wrote).
+     */
+    intent: string;
 }
