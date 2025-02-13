@@ -1,13 +1,13 @@
 import { strict as assert } from 'assert';
 import { TemplateSection } from './TemplateSection';
 import { TestAdapter } from 'botbuilder';
-import { TestPromptManager } from './TestPromptManager';
-import { GPT3Tokenizer } from '../tokenizers';
-import { TestTurnState } from '../TestTurnState';
+import { TestPromptManager } from '../internals/testing/TestPromptManager';
+import { TestTurnState } from '../internals/testing/TestTurnState';
+import { GPTTokenizer } from '../tokenizers';
 
 describe('TemplateSection', () => {
     const adapter = new TestAdapter();
-    const tokenizer = new GPT3Tokenizer();
+    const tokenizer = new GPTTokenizer();
     const functions = new TestPromptManager()
         .addFunction('test', async (context, state, functions, tokenizer, args) => 'Hello World')
         .addFunction('test2', async (context, state, functions, tokenizer, args) => args[0])
@@ -96,6 +96,17 @@ describe('TemplateSection', () => {
             });
         });
 
+        it('should render a template with a {{ $variable }} - even with white space inbetween the parameter', async () => {
+            await adapter.sendTextToBot('test', async (context) => {
+                const state = await TestTurnState.create(context, { conversation });
+                const section = new TemplateSection('Hello {{ $conversation.foo }}', 'user');
+                const rendered = await section.renderAsText(context, state, functions, tokenizer, 100);
+                assert.equal(rendered.output, 'Hello bar');
+                assert.equal(rendered.length, 2);
+                assert.equal(rendered.tooLong, false);
+            });
+        });
+
         it('should render a template with a {{$variable}} and a {{function}}', async () => {
             await adapter.sendTextToBot('test', async (context) => {
                 const state = await TestTurnState.create(context, { conversation });
@@ -111,6 +122,17 @@ describe('TemplateSection', () => {
             await adapter.sendTextToBot('test', async (context) => {
                 const state = await TestTurnState.create(context);
                 const section = new TemplateSection('Hello {{test2 World}}', 'user');
+                const rendered = await section.renderAsText(context, state, functions, tokenizer, 100);
+                assert.equal(rendered.output, 'Hello World');
+                assert.equal(rendered.length, 2);
+                assert.equal(rendered.tooLong, false);
+            });
+        });
+
+        it('should render a template with a {{ function }} and arguments - even with white space inbetween the parameter', async () => {
+            await adapter.sendTextToBot('test', async (context) => {
+                const state = await TestTurnState.create(context);
+                const section = new TemplateSection('Hello {{ test2 World }}', 'user');
                 const rendered = await section.renderAsText(context, state, functions, tokenizer, 100);
                 assert.equal(rendered.output, 'Hello World');
                 assert.equal(rendered.length, 2);

@@ -1,16 +1,12 @@
 # Other documentation
 
-<small>Getting started directory</small>
+<small>**Navigation**</small>
 
-1. [Migration](./00.MIGRATION.md)
-2. [AI Setup](./01.AI-SETUP.md)
-3. [Activity Routing](./02.ACTIVITY-ROUTING.md)
-4. [QNA](./03.QNA.md)
-5. [**Other**](../OTHER/TEAMS-TOOLKIT.md)
-   - [Bot Framework Emulator](./BOTFRAMEWORK-EMULATOR.md)
-   - [Manual resource setup](./MANUAL-RESOURCE-SETUP.md)
-   - [Teams Toolkit extra information](./TEAMS-TOOLKIT.md)
-   - [Teams Toolkit CLI](./TEAMS-TOOLKIT-CLI.md)
+- [**00.OVERVIEW**](./README.md)
+- [Bot Framework Emulator](./BOTFRAMEWORK-EMULATOR.md)
+- [Manual resource setup](./MANUAL-RESOURCE-SETUP.md)
+- [Teams Toolkit extra information](./TEAMS-TOOLKIT.md)
+- [Teams Toolkit CLI](./TEAMS-TOOLKIT-CLI.md)
 
 ## Different ways to run the samples
 
@@ -26,3 +22,13 @@ These docs have been separated out from the samples in order to reduce the minim
 1. [Manual resource setup](./MANUAL-RESOURCE-SETUP.md) for those who want to manually create the resources needed for the samples
 
 Please let us know if you have any questions about this documentation or the samples by filing an issue or discussion topic.
+
+---
+
+## Return to other major section topics:
+
+- [CONCEPTS](../CONCEPTS/README.md)
+- [MIGRATION](../MIGRATION/README.md)
+- [QUICKSTART](../QUICKSTART.md)
+- [SAMPLES](../SAMPLES.md)
+- [**OTHER**](../OTHER/README.md)

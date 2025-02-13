@@ -16,7 +16,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.MessageExtensions
         private const string AuthStartPage = "https://localhost/auth-start.html";
         private const string AccessToken = "test token";
 
-        private class TeamsSsoMessageExtensionsAuthenticationMock : TeamsSsoMessageExtensionsAuthentication
+        private sealed class TeamsSsoMessageExtensionsAuthenticationMock : TeamsSsoMessageExtensionsAuthentication
         {
             public TeamsSsoMessageExtensionsAuthenticationMock(TeamsSsoSettings settings, IConfidentialClientApplicationAdapter msalAdapterMock) : base(settings)
             {
@@ -109,8 +109,10 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.MessageExtensions
             var authenticationResult = MockAuthenticationResult();
             msalAdapterMock.Setup(m => m.InitiateLongRunningProcessInWebApi(It.IsAny<IEnumerable<string>>(), It.IsAny<string>(), ref It.Ref<string>.IsAny)).ReturnsAsync(authenticationResult);
             var messageExtensionAuth = CreateTestClass(msalAdapterMock.Object);
-            JObject activityValue = new();
-            activityValue["authentication"] = new JObject();
+            JObject activityValue = new()
+            {
+                ["authentication"] = new JObject()
+            };
             activityValue["authentication"]!["token"] = "sso token";
             var turnContext = MockTurnContext(activityValue: activityValue);
 
@@ -129,8 +131,10 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.MessageExtensions
             var msalAdapterMock = MockMsalAdapter();
             msalAdapterMock.Setup(m => m.InitiateLongRunningProcessInWebApi(It.IsAny<IEnumerable<string>>(), It.IsAny<string>(), ref It.Ref<string>.IsAny)).Throws(new MsalUiRequiredException("error code", "error message"));
             var messageExtensionAuth = CreateTestClass(msalAdapterMock.Object);
-            JObject activityValue = new();
-            activityValue["authentication"] = new JObject();
+            JObject activityValue = new()
+            {
+                ["authentication"] = new JObject()
+            };
             activityValue["authentication"]!["token"] = "sso token";
             var turnContext = MockTurnContext(activityValue: activityValue);
 
@@ -149,13 +153,15 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.MessageExtensions
             var msalAdapterMock = MockMsalAdapter();
             msalAdapterMock.Setup(m => m.InitiateLongRunningProcessInWebApi(It.IsAny<IEnumerable<string>>(), It.IsAny<string>(), ref It.Ref<string>.IsAny)).Throws(new MsalServiceException("error code", "error message"));
             var messageExtensionAuth = CreateTestClass(msalAdapterMock.Object);
-            JObject activityValue = new();
-            activityValue["authentication"] = new JObject();
+            JObject activityValue = new()
+            {
+                ["authentication"] = new JObject()
+            };
             activityValue["authentication"]!["token"] = "sso token";
             var turnContext = MockTurnContext(activityValue: activityValue);
 
             // Act and Assert
-            await Assert.ThrowsAsync<AuthException>(async () => { await messageExtensionAuth.HandleSsoTokenExchange(turnContext); });
+            await Assert.ThrowsAsync<AuthException>(async () => await messageExtensionAuth.HandleSsoTokenExchange(turnContext));
         }
 
         private static Mock<IConfidentialClientApplicationAdapter> MockMsalAdapter()

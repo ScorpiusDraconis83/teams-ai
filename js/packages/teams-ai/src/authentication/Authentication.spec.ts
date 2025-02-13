@@ -63,7 +63,8 @@ describe('Authentication', () => {
     };
 
     beforeEach(() => {
-        app = new Application({ adapter });
+        app = new Application();
+        sinon.stub(app, 'adapter').get(() => adapter);
         appStub = sinon.stub(app);
         settings = {
             title: 'test',
@@ -199,7 +200,7 @@ describe('Authentication', () => {
             assert.rejects(
                 async () => await auth.signInUser(context, state),
                 new AuthError(
-                    'Incomming activity is not a valid activity to initiate authentication flow.',
+                    'Incoming activity is not a valid activity to initiate authentication flow.',
                     'invalidActivity'
                 )
             );
@@ -439,7 +440,8 @@ describe('AuthenticationManager', () => {
     };
 
     beforeEach(() => {
-        app = new Application({ adapter });
+        app = new Application();
+        sinon.stub(app, 'adapter').get(() => adapter);
         appStub = sinon.stub(app);
     });
 

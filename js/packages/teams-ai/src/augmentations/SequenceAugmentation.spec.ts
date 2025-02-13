@@ -1,15 +1,18 @@
-import { TestAdapter } from 'botbuilder';
-import { TestPromptManager } from '../prompts';
-import { GPT3Tokenizer } from '../tokenizers';
 import assert from 'assert';
-import { ChatCompletionAction, PromptResponse } from '../models';
+import { TestAdapter } from 'botbuilder';
+
+import { TestPromptManager } from '../internals/testing/TestPromptManager';
+import { TestTurnState } from '../internals/testing/TestTurnState';
+import { ChatCompletionAction } from '../models';
+import { GPTTokenizer } from '../tokenizers';
+import { PromptResponse } from '../types';
+
 import { SequenceAugmentation } from './SequenceAugmentation';
-import { TestTurnState } from '../TestTurnState';
 
 describe('SequenceAugmentation', () => {
     const adapter = new TestAdapter();
     const functions = new TestPromptManager();
-    const tokenizer = new GPT3Tokenizer();
+    const tokenizer = new GPTTokenizer();
     const actions: ChatCompletionAction[] = [
         {
             name: 'test',
@@ -237,7 +240,21 @@ describe('SequenceAugmentation', () => {
                 // Create plan from response
                 const plan = await augmentation.createPlanFromResponse(context, state, {
                     status: 'success',
-                    message: { role: 'assistant', content: validation.value }
+                    message: {
+                        role: 'assistant',
+                        content: validation.value,
+                        context: {
+                            intent: 'to test citations',
+                            citations: [
+                                {
+                                    url: '',
+                                    title: '',
+                                    filepath: '',
+                                    content: 'my citation content...'
+                                }
+                            ]
+                        }
+                    }
                 });
                 assert.notEqual(plan, undefined);
                 assert.deepEqual(plan, {
@@ -252,7 +269,21 @@ describe('SequenceAugmentation', () => {
                         },
                         {
                             type: 'SAY',
-                            response: 'hello world'
+                            response: {
+                                role: 'assistant',
+                                content: 'hello world',
+                                context: {
+                                    intent: 'to test citations',
+                                    citations: [
+                                        {
+                                            url: '',
+                                            title: '',
+                                            filepath: '',
+                                            content: 'my citation content...'
+                                        }
+                                    ]
+                                }
+                            }
                         }
                     ]
                 });

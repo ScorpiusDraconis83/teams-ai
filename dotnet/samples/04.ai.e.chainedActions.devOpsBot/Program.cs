@@ -27,9 +27,9 @@ builder.Services.AddSingleton<BotFrameworkAuthentication, ConfigurationBotFramew
 // Create the Cloud Adapter with error handling enabled.
 // Note: some classes expect a BotAdapter and some expect a BotFrameworkHttpAdapter, so
 // register the same adapter instance for all types.
-builder.Services.AddSingleton<CloudAdapter, AdapterWithErrorHandler>();
-builder.Services.AddSingleton<IBotFrameworkHttpAdapter>(sp => sp.GetService<CloudAdapter>()!);
-builder.Services.AddSingleton<BotAdapter>(sp => sp.GetService<CloudAdapter>()!);
+builder.Services.AddSingleton<TeamsAdapter, AdapterWithErrorHandler>();
+builder.Services.AddSingleton<IBotFrameworkHttpAdapter>(sp => sp.GetService<TeamsAdapter>()!);
+builder.Services.AddSingleton<BotAdapter>(sp => sp.GetService<TeamsAdapter>()!);
 
 // Create singleton instances for bot application
 builder.Services.AddSingleton<IStorage, MemoryStorage>();
@@ -38,7 +38,7 @@ builder.Services.AddSingleton<IStorage, MemoryStorage>();
 if (!string.IsNullOrEmpty(config.OpenAI?.ApiKey))
 {
     builder.Services.AddSingleton<OpenAIModel>(sp => new(
-        new OpenAIModelOptions(config.OpenAI.ApiKey, "gpt-3.5-turbo")
+        new OpenAIModelOptions(config.OpenAI.ApiKey, "gpt-4o")
         {
             LogRequests = true
         },
@@ -50,7 +50,7 @@ else if (!string.IsNullOrEmpty(config.Azure?.OpenAIApiKey) && !string.IsNullOrEm
     builder.Services.AddSingleton<OpenAIModel>(sp => new(
         new AzureOpenAIModelOptions(
             config.Azure.OpenAIApiKey,
-            "gpt-35-turbo",
+            "gpt-4o",
             config.Azure.OpenAIEndpoint
         )
         {
@@ -78,7 +78,7 @@ builder.Services.AddTransient<IBot>(sp =>
             prompts,
             async (context, state, planner) =>
             {
-                return await Task.FromResult(prompts.GetPrompt("Sequence"));
+                return await Task.FromResult(prompts.GetPrompt("Tools"));
             }
         ),
         loggerFactory

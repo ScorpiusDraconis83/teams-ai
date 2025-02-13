@@ -7,13 +7,20 @@
  */
 
 import axios, { AxiosInstance, AxiosResponse, AxiosRequestConfig } from 'axios';
-import { EmbeddingsModel, EmbeddingsResponse } from './EmbeddingsModel';
+import { EmbeddingsModel, EmbeddingsResponse } from '../types/EmbeddingsModel';
 import { CreateEmbeddingRequest, CreateEmbeddingResponse, OpenAICreateEmbeddingRequest, Colorize } from '../internals';
 
 /**
  * Base model options common to both OpenAI and Azure OpenAI services.
  */
 export interface BaseOpenAIEmbeddingsOptions {
+    /**
+     * Optional. Number of dimensions to use when generating embeddings.
+     * @remarks
+     * Only valid for embedding models that support dynamic dimensionality.
+     */
+    dimensions?: number;
+
     /**
      * Optional. Whether to log requests to the console.
      * @remarks
@@ -47,9 +54,7 @@ export interface OpenAIEmbeddingsOptions extends BaseOpenAIEmbeddingsOptions {
     apiKey: string;
 
     /**
-     * Model to use for completion.
-     * @remarks
-     * For Azure OpenAI this is the name of the deployment to use.
+     * Embeddings Model to use.
      */
     model: string;
 
@@ -64,6 +69,31 @@ export interface OpenAIEmbeddingsOptions extends BaseOpenAIEmbeddingsOptions {
      * For Azure OpenAI this is the deployment endpoint.
      */
     endpoint?: string;
+}
+
+/**
+ * Options for configuring an embeddings object that calls an `OpenAI` compliant endpoint.
+ * @remarks
+ * The endpoint should comply with the OpenAPI spec for OpenAI's API:
+ * https://github.com/openai/openai-openapi
+ * And an example of a compliant endpoint is LLaMA.cpp's reference server:
+ * https://github.com/ggerganov/llama.cpp/blob/master/examples/server/README.md
+ */
+export interface OpenAILikeEmbeddingsOptions extends BaseOpenAIEmbeddingsOptions {
+    /**
+     * Endpoint of the embeddings server to call.
+     */
+    endpoint: string;
+
+    /**
+     * Embeddings Model to use.
+     */
+    model: string;
+
+    /**
+     * Optional. API key to use when calling the embeddings server.
+     */
+    apiKey?: string;
 }
 
 /**
@@ -103,11 +133,11 @@ export class OpenAIEmbeddings implements EmbeddingsModel {
     /**
      * Options the client was configured with.
      */
-    public readonly options: OpenAIEmbeddingsOptions | AzureOpenAIEmbeddingsOptions;
+    public readonly options: OpenAIEmbeddingsOptions | AzureOpenAIEmbeddingsOptions | OpenAILikeEmbeddingsOptions;
 
     /**
      * Creates a new `OpenAIEmbeddings` instance.
-     * @param options Options for configuring the embeddings client.
+     * @param {OpenAIEmbeddingsOptions | AzureOpenAIEmbeddingsOptions | OpenAILikeEmbeddingsOptions} options Options for configuring the embeddings client.
      */
     public constructor(options: OpenAIEmbeddingsOptions | AzureOpenAIEmbeddingsOptions) {
         // Check for azure config
@@ -125,12 +155,6 @@ export class OpenAIEmbeddings implements EmbeddingsModel {
             let endpoint = this.options.azureEndpoint.trim();
             if (endpoint.endsWith('/')) {
                 endpoint = endpoint.substring(0, endpoint.length - 1);
-            }
-
-            if (!endpoint.toLowerCase().startsWith('https://')) {
-                throw new Error(
-                    `Client created with an invalid endpoint of '${endpoint}'. The endpoint must be a valid HTTPS url.`
-                );
             }
 
             this.options.azureEndpoint = endpoint;
@@ -152,21 +176,26 @@ export class OpenAIEmbeddings implements EmbeddingsModel {
 
     /**
      * Creates embeddings for the given inputs using the OpenAI API.
-     * @param model Name of the model to use (or deployment for Azure).
-     * @param inputs Text inputs to create embeddings for.
-     * @returns A `EmbeddingsResponse` with a status and the generated embeddings or a message when an error occurs.
+     * @param {string} model Name of the model to use (or deployment for Azure).
+     * @param {string | string[]} inputs Text inputs to create embeddings for.
+     * @returns {Promise<EmbeddingsResponse>} A `EmbeddingsResponse` with a status and the generated embeddings or a message when an error occurs.
      */
-    public async createEmbeddings(inputs: string | string[]): Promise<EmbeddingsResponse> {
+    public async createEmbeddings(model: string, inputs: string | string[]): Promise<EmbeddingsResponse> {
         if (this.options.logRequests) {
             console.log(Colorize.title('EMBEDDINGS REQUEST:'));
             console.log(Colorize.output(inputs));
         }
 
-        const startTime = Date.now();
-        const response = await this.createEmbeddingRequest({
+        const request: CreateEmbeddingRequest = {
+            model: model,
             input: inputs
-        });
+        };
+        if (this.options.dimensions) {
+            request.dimensions = this.options.dimensions;
+        }
 
+        const startTime = Date.now();
+        const response = await this.createEmbeddingRequest(request);
         if (this.options.logRequests) {
             console.log(Colorize.title('RESPONSE:'));
             console.log(Colorize.value('status', response.status));
@@ -191,8 +220,9 @@ export class OpenAIEmbeddings implements EmbeddingsModel {
     }
 
     /**
-     * @param request
      * @private
+     * @param {CreateEmbeddingRequest} request The request to send to the OpenAI API.
+     * @returns {Promise<AxiosResponse<CreateEmbeddingResponse>>} A promise that resolves to the response from the OpenAI API.
      */
     protected createEmbeddingRequest(request: CreateEmbeddingRequest): Promise<AxiosResponse<CreateEmbeddingResponse>> {
         if (this._useAzure) {
@@ -210,10 +240,12 @@ export class OpenAIEmbeddings implements EmbeddingsModel {
     }
 
     /**
-     * @param url
-     * @param body
-     * @param retryCount
      * @private
+     * @template TData Optional. Type of the data associated with the action.
+     * @param {string} url The URL to send the request to.
+     * @param {object} body The body of the request.
+     * @param {number} retryCount The number of times the request has been retried.
+     * @returns {Promise<AxiosResponse<TData>>} A promise that resolves to the response from the OpenAI API.
      */
     protected async post<TData>(url: string, body: object, retryCount = 0): Promise<AxiosResponse<TData>> {
         // Initialize request config
@@ -232,7 +264,7 @@ export class OpenAIEmbeddings implements EmbeddingsModel {
         if (this._useAzure) {
             const options = this.options as AzureOpenAIEmbeddingsOptions;
             requestConfig.headers['api-key'] = options.azureApiKey;
-        } else {
+        } else if ((this.options as OpenAIEmbeddingsOptions).apiKey) {
             const options = this.options as OpenAIEmbeddingsOptions;
             requestConfig.headers['Authorization'] = `Bearer ${options.apiKey}`;
             if (options.organization) {

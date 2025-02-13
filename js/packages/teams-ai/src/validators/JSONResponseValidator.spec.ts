@@ -1,15 +1,15 @@
 import { strict as assert } from 'assert';
 import * as sinon from 'sinon';
+import { TestAdapter } from 'botbuilder';
 
+import { TestTurnState } from '../internals/testing/TestTurnState';
+import { GPTTokenizer } from '../tokenizers';
 import { JSONResponseValidator } from './JSONResponseValidator';
 import { Schema, ValidationError } from 'jsonschema';
-import { TestAdapter } from 'botbuilder';
-import { GPT3Tokenizer } from '../tokenizers';
-import { TestTurnState } from '../TestTurnState';
 
 describe('JSONResponseValidator', () => {
     const adapter = new TestAdapter();
-    const tokenizer = new GPT3Tokenizer();
+    const tokenizer = new GPTTokenizer();
     const schema: Schema = {
         type: 'object',
         properties: {

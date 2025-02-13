@@ -95,17 +95,25 @@ namespace Microsoft.Teams.AI.AI.Prompts.Sections
                 return new(new() { }, 0, false);
             }
 
-            messages.Reverse();
+            // Shallow copy
+            List<ChatMessage> history = new(messages);
+            history.Reverse();
 
             // Populate history and stay under the token budget
-
             int tokens = 0;
             int budget = this.Tokens > 1 ? Math.Min(this.Tokens, maxTokens) : maxTokens;
             List<ChatMessage> output = new();
 
-            foreach (ChatMessage message in messages)
+            foreach (ChatMessage message in history)
             {
                 int length = tokenizer.Encode(this.GetMessageText(message)).Count;
+
+                // Add length of any image parts
+                // This accounts for low detail images but not high detail images.
+                if (message.Content is IList<MessageContentParts> contentParts)
+                {
+                    length += contentParts.Where((part) => part is ImageContentPart).Count() * 85;
+                }
 
                 // Stop if we're over the token budget
                 if (tokens + length > budget)
@@ -114,7 +122,13 @@ namespace Microsoft.Teams.AI.AI.Prompts.Sections
                 }
 
                 tokens += length;
-                output.Add(message);
+                output.Insert(0, message);
+            }
+
+            // Remove completed partial action outputs
+            while (messages.Count > 0 && messages[0].Role == ChatRole.Tool) 
+            {
+                messages.RemoveAt(0); 
             }
 
             return await Task.FromResult(new RenderedPromptSection<List<ChatMessage>>(output, tokens, tokens > budget));

@@ -7,7 +7,7 @@ import assert from 'assert';
 import * as UserTokenAccess from './UserTokenAccess';
 import { OAuthPromptMessageExtensionAuthentication } from './OAuthMessageExtensionAuthentication';
 
-describe('OAuthPromptMessageExtensionAuthentication', () => {
+describe('OAuthMessageExtensionAuthentication', () => {
     const adapter = new TestAdapter();
 
     const createTurnContextAndState = async (activity: Partial<Activity>): Promise<[TurnContext, TurnState]> => {
@@ -217,7 +217,7 @@ describe('OAuthPromptMessageExtensionAuthentication', () => {
             ];
 
             testCases.forEach(([name, authType]) => {
-                it(`should send type '${authType}' suggestion action when couldn't retrieve token from token store for invoke name ${name}`, async () => {
+                it(`should send type '${authType}' suggestion action when couldn't retrieve token from token store for invoke name ${name} when sso is enabled`, async () => {
                     const magicCode = 'OAuth flow magic code';
                     const [context, _] = await createTurnContextAndState({
                         type: ActivityTypes.Invoke,
@@ -234,6 +234,13 @@ describe('OAuthPromptMessageExtensionAuthentication', () => {
                             connectionName: 'connectionName'
                         })
                     );
+
+                    const settings = {
+                        connectionName: 'connectionName',
+                        title: 'title',
+                        text: 'text',
+                        enableSso: true
+                    };
 
                     const meAuth = new OAuthPromptMessageExtensionAuthentication(settings);
 
@@ -252,9 +259,14 @@ describe('OAuthPromptMessageExtensionAuthentication', () => {
                     assert(sentActivity.value.body.composeExtension.suggestedActions.actions[0].type == 'openUrl');
                     assert(sentActivity.value.body.composeExtension.suggestedActions.actions[0].value == 'signInLink');
                     assert(
-                        sentActivity.value.body.composeExtension.suggestedActions.actions[0].title ==
-                            'Bot Service OAuth'
+                        sentActivity.value.body.composeExtension.suggestedActions.actions[0].title == settings.title
                     );
+                    assert(sentActivity.value.body.composeExtension.suggestedActions.actions[0].text == settings.text);
+                    assert(
+                        sentActivity.value.body.composeExtension.suggestedActions.actions[0].displayText ==
+                            settings.text
+                    );
+
                     // Only one activity should be sent
                     assert(adapter.getNextReply() == undefined);
                 });
@@ -353,6 +365,65 @@ describe('OAuthPromptMessageExtensionAuthentication', () => {
             assert(result == tokenResponse);
             assert(exchangeTokenStub.calledOnce);
             assert(exchangeTokenStub.calledWith(context, settings, { token: 'token' }));
+        });
+    });
+
+    describe('isSsoSignIn()', () => {
+        it('should return true if the activity is `composeExtension/query` and sso is enabled', async () => {
+            const [context, _] = await createTurnContextAndState({
+                type: ActivityTypes.Invoke,
+                name: 'composeExtension/query'
+            });
+
+            const settings = {
+                connectionName: 'connectionName',
+                title: 'title',
+                enableSso: true
+            };
+
+            const meAuth = new OAuthPromptMessageExtensionAuthentication(settings);
+
+            const result = meAuth.isSsoSignIn(context);
+
+            assert(result === true);
+        });
+
+        it('should return false if the activity is not `composeExtension/query`', async () => {
+            const [context, _] = await createTurnContextAndState({
+                type: ActivityTypes.Invoke,
+                name: 'NOT composeExtension/query'
+            });
+
+            const settings = {
+                connectionName: 'connectionName',
+                title: 'title',
+                enableSso: true
+            };
+
+            const meAuth = new OAuthPromptMessageExtensionAuthentication(settings);
+
+            const result = meAuth.isSsoSignIn(context);
+
+            assert(result === false);
+        });
+
+        it('should return false if sso is not enabled', async () => {
+            const [context, _] = await createTurnContextAndState({
+                type: ActivityTypes.Invoke,
+                name: 'composeExtension/query'
+            });
+
+            const settings = {
+                connectionName: 'connectionName',
+                title: 'title',
+                enableSso: false
+            };
+
+            const meAuth = new OAuthPromptMessageExtensionAuthentication(settings);
+
+            const result = meAuth.isSsoSignIn(context);
+
+            assert(result === false);
         });
     });
 });

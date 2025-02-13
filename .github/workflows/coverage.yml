@@ -11,7 +11,8 @@ on:
     paths: [
         '.github/workflows/coverage.yml',
         'js/**',
-        'dotnet/**'
+        'dotnet/**',
+        'python/**'
     ]
 
 permissions: read-all
@@ -31,9 +32,9 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Setup NodeJS ${{ env.node-version }}
-        uses: actions/setup-node@b39b52d1213e96004bfcb1c61a8a6fa8ab84f3e8 # v4.0.1
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
         with:
           node-version: ${{ env.node-version }}
       - name: Install Dependencies
@@ -62,15 +63,15 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Setup .NET ${{ env.dotnet-version }}
-        uses: actions/setup-dotnet@4d6c8fcf3c8f7a60068d26b594648e99df24cee3 # v4.0.0
+        uses: actions/setup-dotnet@3951f0dfe7a07e2313ec93c75700083e2005cbab # v4.3.0
         with:
           dotnet-version: ${{ env.dotnet-version }}
       - name: Test
         run: dotnet test Microsoft.TeamsAI.Tests/Microsoft.Teams.AI.Tests.csproj --verbosity normal --logger trx --results-directory ./TestResults --collect:"XPlat Code Coverage" --configuration Release
       - name: Coverage
-        uses: danielpalme/ReportGenerator-GitHub-Action@4d510cbed8a05af5aefea46c7fd6e05b95844c89 # 5.2.0
+        uses: danielpalme/ReportGenerator-GitHub-Action@f1927db1dbfc029b056583ee488832e939447fe6 # 5.4.4
         with:
           reports: ${{ env.SOLUTION_DIR }}TestResults/*/coverage.cobertura.xml
           targetdir: ${{ env.SOLUTION_DIR }}TestResults/coverage
@@ -83,13 +84,46 @@ jobs:
           parallel: true
           files: ${{ env.SOLUTION_DIR }}TestResults/coverage/lcov.info
       - name: Upload Tests
-        uses: actions/upload-artifact@c7d193f32edcb7bfad88892161225aeda64e9392 # v4.0.0
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: testresults-dotnet-${{ env.dotnet-version }}
           path: ${{ env.SOLUTION_DIR }}TestResults
 
+  python:
+    name: Python
+    runs-on: ubuntu-latest
+    environment: main
+    env:
+      python-version: 3.8
+    defaults:
+      run:
+        working-directory: python/packages/ai
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Setup Python ${{ env.python-version }}
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+        with:
+          python-version: ${{ env.python-version }}
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install poetry
+          poetry install
+      - name: Test
+        run: |
+          poetry run test
+      - name: Coveralls
+        uses: coverallsapp/github-action@v2.2.3
+        with:
+          flag-name: python
+          parallel: true
+          files: python/packages/ai/coverage/lcov.info
+
   finish:
-    needs: [javascript, dotnet]
+    needs: [javascript, dotnet, python]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     environment: main
@@ -98,4 +132,4 @@ jobs:
         uses: coverallsapp/github-action@v2
         with:
           parallel-finished: true
-          carryforward: 'javascript,dotnet'
+          carryforward: 'javascript,dotnet,python'

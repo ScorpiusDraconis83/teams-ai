@@ -4,6 +4,7 @@ using Microsoft.Bot.Schema;
 using Microsoft.Teams.AI.Exceptions;
 using Microsoft.Teams.AI.State;
 using Microsoft.Teams.AI.Tests.TestUtils;
+using Newtonsoft.Json.Linq;
 
 namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
 {
@@ -88,7 +89,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
         }
 
         [Fact]
-        public async void Test_Authenticate_Pending()
+        public async Task Test_Authenticate_Pending()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -102,14 +103,14 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
             // assert
             var stateKey = "__fromId:test:Bot:AuthState__";
             var authState = state.Conversation[stateKey] as Dictionary<string, string>;
-            Assert.Equal(null, token);
+            Assert.Null(token);
             Assert.NotNull(authState);
             Assert.True(authState.ContainsKey("message"));
             Assert.Equal("test text", authState["message"]);
         }
 
         [Fact]
-        public async void Test_Authenticate_Complete()
+        public async Task Test_Authenticate_Complete()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -125,7 +126,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
         }
 
         [Fact]
-        public async void Test_Authenticate_CompleteWithoutToken()
+        public async Task Test_Authenticate_CompleteWithoutToken()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -137,11 +138,11 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
             var token = await botAuth.AuthenticateAsync(context, state);
 
             // assert
-            Assert.Equal(null, token);
+            Assert.Null(token);
         }
 
         [Fact]
-        public async void Test_HandleSignInActivity_Complete()
+        public async Task Test_HandleSignInActivity_Complete()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -171,7 +172,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
         }
 
         [Fact]
-        public async void Test_HandleSignInActivity_CompleteWithoutToken()
+        public async Task Test_HandleSignInActivity_CompleteWithoutToken()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -191,7 +192,7 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
         }
 
         [Fact]
-        public async void Test_HandleSignInActivity_ThrowException()
+        public async Task Test_HandleSignInActivity_ThrowException()
         {
             // arrange
             var app = new Application<TurnState>(new ApplicationOptions<TurnState>());
@@ -208,6 +209,81 @@ namespace Microsoft.Teams.AI.Tests.Application.Authentication.Bot
             // assert
             Assert.NotNull(authException);
             Assert.Equal("Unexpected error encountered while signing in: mocked error.\nIncoming activity details: type: message, name: ", authException.Message);
+        }
+
+        [Fact]
+        public void Test_SetSettingNameInContextActivityValue_NullContextActivityValue()
+        {
+            var context = MockTurnContext();
+
+            // act
+            BotAuthenticationBase<TurnState>.SetSettingNameInContextActivityValue(context, "settingNameValue");
+
+            // assert
+            Assert.NotNull(context.Activity.Value);
+            Assert.Equal("settingNameValue", ((JObject)context.Activity.Value).GetValue("settingName")!.ToString());
+        }
+
+
+        [Fact]
+        public void Test_SetSettingNameInContextActivityValue_ExistingContextActivityValueObject()
+        {
+            var context = MockTurnContext();
+            context.Activity.Value = new JObject();
+            ((JObject)context.Activity.Value).Add("testKey", "testValue");
+
+            // act
+            BotAuthenticationBase<TurnState>.SetSettingNameInContextActivityValue(context, "settingNameValue");
+
+            // assert
+            Assert.NotNull(context.Activity.Value);
+
+            var v = (JObject)context.Activity.Value;
+            Assert.Equal("settingNameValue", v.GetValue("settingName")!.ToString());
+            Assert.Equal("testValue", v.GetValue("testKey")!.ToString());
+
+        }
+
+        [Fact]
+        public void Test_GetSettingNameFromContextActivityValue_NullContextActivityValue_ReturnsNull()
+        {
+            var context = MockTurnContext();
+            context.Activity.Value = null;
+
+            // act
+            var s = BotAuthenticationBase<TurnState>.GetSettingNameFromContextActivityValue(context);
+
+            // assert
+            Assert.Null(s);
+        }
+
+        [Fact]
+        public void Test_GetSettingNameFromContextActivityValue_MissingSettingName_ReturnsNull()
+        {
+            var context = MockTurnContext();
+            context.Activity.Value = new JObject();
+            ((JObject)context.Activity.Value).Add("INCORRECT settingName", "settingNameValue");
+
+            // act
+            var s = BotAuthenticationBase<TurnState>.GetSettingNameFromContextActivityValue(context);
+
+            // assert
+            Assert.Null(s);
+        }
+
+        [Fact]
+        public void Test_GetSettingNameFromContextActivityValue_ReturnsSettingName()
+        {
+            var context = MockTurnContext();
+            context.Activity.Value = new JObject();
+            ((JObject)context.Activity.Value).Add("settingName", "settingNameValue");
+
+            // act
+            var s = BotAuthenticationBase<TurnState>.GetSettingNameFromContextActivityValue(context);
+
+            // assert
+            Assert.NotNull(s);
+            Assert.Equal("settingNameValue", s);
         }
 
         private static TurnContext MockTurnContext(string type = ActivityTypes.Message)

@@ -1,80 +1,138 @@
 ﻿using Microsoft.Extensions.Logging;
-using Microsoft.Teams.AI.State;
-using Azure.AI.OpenAI;
-using Azure;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Teams.AI.Utilities;
 using Microsoft.Teams.AI.Exceptions;
+using Microsoft.Teams.AI.AI.Models;
+using OpenAI;
+using ServiceVersion = Azure.AI.OpenAI.AzureOpenAIClientOptions.ServiceVersion;
+using System.ClientModel.Primitives;
+using Azure.AI.OpenAI;
+using System.ClientModel;
+using OpenAI.Embeddings;
 
 namespace Microsoft.Teams.AI.AI.Embeddings
 {
     /// <summary>
-    /// Embeddings class that uses OpenAI's embeddings API.
+    /// A `IEmbeddingsModel` for calling OpenAI and Azure OpenAI hosted models.
     /// </summary>
-    public class OpenAIEmbeddings<TState, TOptions> : IEmbeddings<TState>
-        where TState : TurnState
-        where TOptions : OpenAIEmbeddingsOptions
+    public class OpenAIEmbeddings : IEmbeddingsModel
     {
-        private TOptions _options { get; }
-        private protected readonly OpenAIClient _client;
+        private readonly BaseOpenAIEmbeddingsOptions _options;
         private readonly ILogger _logger;
 
+        private readonly OpenAIClient _openAIClient;
+        private string _deploymentName;
+
+        private static readonly string _userAgent = "AlphaWave";
+
         /// <summary>
-        /// Constructs an instance of the <see cref="OpenAIEmbeddings{TState, TOptions}"/> class.
+        /// Initializes a new instance of the <see cref="OpenAIEmbeddings"/> class.
         /// </summary>
-        /// <param name="options">The options to configure the embeddings.</param>
-        /// <param name="loggerFactory">Optional. The logger factory instance.</param>
-        /// <exception cref="ArgumentException"></exception>
-        public OpenAIEmbeddings(TOptions options, ILoggerFactory? loggerFactory = null)
-        {
-            _options = options;
-            _client = _CreateOpenAIClient(options);
-            _logger = loggerFactory is null ? NullLogger.Instance : loggerFactory.CreateLogger(typeof(OpenAIEmbeddings<TState, TOptions>));
-
-            if (options.LogRequests && loggerFactory == null)
-            {
-                throw new ArgumentException($"`{nameof(loggerFactory)}` parameter cannot be null if `LogRequests` option is set to true");
-            }
-        }
-
-        private OpenAIClient _CreateOpenAIClient(TOptions options)
+        /// <param name="options">Options for configuring an `OpenAIEmbeddings` to call an OpenAI hosted model.</param>
+        /// <param name="loggerFactory">The logger factory instance.</param>
+        /// <param name="httpClient">HTTP client.</param>
+        public OpenAIEmbeddings(OpenAIEmbeddingsOptions options, ILoggerFactory? loggerFactory = null, HttpClient? httpClient = null)
         {
             Verify.ParamNotNull(options);
-            if (options is OpenAIEmbeddingsOptions)
+            Verify.ParamNotNull(options.Model, "OpenAIEmbeddingsOptions.Model");
+
+
+            options.LogRequests = options.LogRequests ?? false;
+            options.RetryPolicy = options.RetryPolicy ?? new List<TimeSpan> { TimeSpan.FromMilliseconds(2000), TimeSpan.FromMilliseconds(5000) };
+            _logger = loggerFactory == null ? NullLogger.Instance : loggerFactory.CreateLogger<OpenAIModel>();
+
+            OpenAIClientOptions openAIClientOptions = new()
             {
-                return new OpenAIClient(options.ApiKey);
+                RetryPolicy = new SequentialDelayRetryPolicy(options.RetryPolicy!, options.RetryPolicy!.Count)
+            };
+
+            openAIClientOptions.AddPolicy(new AddHeaderRequestPolicy("User-Agent", _userAgent), PipelinePosition.PerCall);
+            if (httpClient != null)
+            {
+                openAIClientOptions.Transport = new HttpClientPipelineTransport(httpClient);
             }
-            else if (options is AzureOpenAIEmbeddingsOptions)
+
+            if (!string.IsNullOrEmpty(options.Organization))
             {
-                return new OpenAIClient(new Uri(options.Endpoint), new AzureKeyCredential(options.ApiKey));
+                openAIClientOptions.AddPolicy(new AddHeaderRequestPolicy("OpenAI-Organization", options.Organization!), PipelinePosition.PerCall);
+            }
+            _openAIClient = new OpenAIClient(new ApiKeyCredential(options.ApiKey), openAIClientOptions);
+
+            _deploymentName = options.Model;
+            _options = options;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="OpenAIModel"/> class.
+        /// </summary>
+        /// <param name="options">Options for configuring an `OpenAIModel` to call an Azure OpenAI hosted model.</param>
+        /// <param name="loggerFactory">The logger factory instance.</param>
+        /// <param name="httpClient">HTTP client.</param>
+        public OpenAIEmbeddings(AzureOpenAIEmbeddingsOptions options, ILoggerFactory? loggerFactory = null, HttpClient? httpClient = null)
+        {
+            Verify.ParamNotNull(options);
+            Verify.ParamNotNull(options.AzureDeployment, "AzureOpenAIEmbeddingsOptions.AzureDeployment");
+            Verify.ParamNotNull(options.AzureEndpoint, "AzureOpenAIEmbeddingsOptions.AzureEndpoint");
+
+            string apiVersion = options.AzureApiVersion ?? "2024-06-01";
+            ServiceVersion? serviceVersion = ConvertStringToServiceVersion(apiVersion);
+            if (serviceVersion == null)
+            {
+                throw new ArgumentException($"Model created with an unsupported API version of `{apiVersion}`.");
+            }
+
+
+            options.LogRequests = options.LogRequests ?? false;
+            options.RetryPolicy = options.RetryPolicy ?? new List<TimeSpan> { TimeSpan.FromMilliseconds(2000), TimeSpan.FromMilliseconds(5000) };
+            _logger = loggerFactory == null ? NullLogger.Instance : loggerFactory.CreateLogger<OpenAIModel>();
+
+
+            AzureOpenAIClientOptions azureOpenAIClientOptions = new(serviceVersion.Value)
+            {
+                RetryPolicy = new SequentialDelayRetryPolicy(options.RetryPolicy, options.RetryPolicy.Count)
+            };
+
+            azureOpenAIClientOptions.AddPolicy(new AddHeaderRequestPolicy("User-Agent", _userAgent), PipelinePosition.PerCall);
+            if (httpClient != null)
+            {
+                azureOpenAIClientOptions.Transport = new HttpClientPipelineTransport(httpClient);
+            }
+
+            Uri uri = new(options.AzureEndpoint);
+            if (options.TokenCredential != null)
+            {
+                _openAIClient = new AzureOpenAIClient(uri, options.TokenCredential, azureOpenAIClientOptions);
+            }
+            else if (options.AzureApiKey != null && options.AzureApiKey != string.Empty)
+            {
+                _openAIClient = new AzureOpenAIClient(uri, new ApiKeyCredential(options.AzureApiKey), azureOpenAIClientOptions);
             }
             else
             {
-                throw new ArgumentException($"`{nameof(options)}` parameter must be of type `{nameof(OpenAIEmbeddingsOptions)}` or `{nameof(AzureOpenAIEmbeddingsOptions)}`");
+                throw new ArgumentException("token credential or api key is required.");
             }
+
+            _deploymentName = options.AzureDeployment;
+            _options = options;
         }
 
         /// <inheritdoc/>
         public async Task<EmbeddingsResponse> CreateEmbeddingsAsync(IList<string> inputs, CancellationToken cancellationToken = default)
         {
-            if (this._options.LogRequests)
+            if (_options.LogRequests!.Value)
             {
                 _logger?.LogInformation($"\nEmbeddings REQUEST: inputs={inputs}");
             }
 
-            EmbeddingsOptions embeddingsOptions = new()
-            {
-                DeploymentName = _options.Model,
-                Input = inputs,
-            };
+            EmbeddingClient embeddingsClient = _openAIClient.GetEmbeddingClient(_deploymentName);
 
             try
             {
                 DateTime startTime = DateTime.Now;
-                Response<Azure.AI.OpenAI.Embeddings> response = await _client.GetEmbeddingsAsync(embeddingsOptions, cancellationToken);
-                List<ReadOnlyMemory<float>> embeddingItems = response.Value.Data.OrderBy(item => item.Index).Select(item => item.Embedding).ToList();
+                ClientResult<OpenAIEmbeddingCollection> response = await embeddingsClient.GenerateEmbeddingsAsync(inputs);
+                List<ReadOnlyMemory<float>> embeddingItems = response.Value.OrderBy(item => item.Index).Select(item => item.ToFloats()).ToList();
 
-                if (this._options.LogRequests)
+                if (_options.LogRequests!.Value)
                 {
                     TimeSpan duration = DateTime.Now - startTime;
                     _logger?.LogInformation($"\nEmbeddings SUCCEEDED: duration={duration.TotalSeconds} response={embeddingItems}");
@@ -86,7 +144,7 @@ namespace Microsoft.Teams.AI.AI.Embeddings
                     Output = embeddingItems,
                 };
             }
-            catch (RequestFailedException ex) when (ex.Status == 429)
+            catch (ClientResultException ex) when (ex.Status == 429)
             {
                 return new EmbeddingsResponse
                 {
@@ -94,7 +152,7 @@ namespace Microsoft.Teams.AI.AI.Embeddings
                     Message = $"The embeddings API returned a rate limit error",
                 };
             }
-            catch (RequestFailedException ex)
+            catch (ClientResultException ex)
             {
                 return new EmbeddingsResponse
                 {
@@ -106,6 +164,17 @@ namespace Microsoft.Teams.AI.AI.Embeddings
             {
                 throw new TeamsAIException($"Error while executing openAI Embeddings execution: {ex.Message}", ex);
             }
+        }
+
+        private ServiceVersion? ConvertStringToServiceVersion(string apiVersion)
+        {
+            return apiVersion switch
+            {
+                "2024-06-01" => ServiceVersion.V2024_06_01,
+                "2024-08-01-preview" => ServiceVersion.V2024_08_01_Preview,
+                "2024-10-01-preview" => ServiceVersion.V2024_10_01_Preview,
+                _ => null,
+            };
         }
     }
 }

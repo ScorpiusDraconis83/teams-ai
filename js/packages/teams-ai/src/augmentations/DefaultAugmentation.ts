@@ -7,13 +7,15 @@
  */
 
 import { TurnContext } from 'botbuilder-core';
-import { PromptResponse } from '../models';
+
+import { Memory } from '../MemoryFork';
 import { Plan, PredictedSayCommand } from '../planners';
+import { PromptResponse } from '../types';
+import { PromptSection } from '../prompts';
 import { Tokenizer } from '../tokenizers';
 import { Validation } from '../validators';
+
 import { Augmentation } from './Augmentation';
-import { PromptSection } from '../prompts';
-import { Memory } from '../MemoryFork';
 
 /**
  * The default 'none' augmentation.
@@ -23,7 +25,7 @@ import { Memory } from '../MemoryFork';
  */
 export class DefaultAugmentation implements Augmentation<string> {
     /**
-     * Creates an optional prompt section for the augmentation.
+     * @returns {PromptSection|undefined} Returns an optional prompt section for the augmentation.
      */
     public createPromptSection(): PromptSection | undefined {
         return undefined;
@@ -31,12 +33,12 @@ export class DefaultAugmentation implements Augmentation<string> {
 
     /**
      * Validates a response to a prompt.
-     * @param context Context for the current turn of conversation with the user.
-     * @param memory An interface for accessing state values.
-     * @param tokenizer Tokenizer to use for encoding and decoding text.
-     * @param response Response to validate.
-     * @param remaining_attempts Number of remaining attempts to validate the response.
-     * @returns A `Validation` object.
+     * @param {TurnContext} context - Context for the current turn of conversation with the user.
+     * @param {Memory} memory - An interface for accessing state values.
+     * @param {Tokenizer} tokenizer - Tokenizer to use for encoding and decoding text.
+     * @param {PromptResponse<string>} response - Response to validate.
+     * @param {number} remaining_attempts Number of remaining attempts to validate the response.
+     * @returns {Validation} A `Validation` object.
      */
     public validateResponse(
         context: TurnContext,
@@ -53,10 +55,10 @@ export class DefaultAugmentation implements Augmentation<string> {
 
     /**
      * Creates a plan given validated response value.
-     * @param context Context for the current turn of conversation.
-     * @param memory An interface for accessing state variables.
-     * @param response The validated and transformed response for the prompt.
-     * @returns The created plan.
+     * @param {TurnContext} context Context for the current turn of conversation.
+     * @param {Memory} memory An interface for accessing state variables.
+     * @param {PromptResponse<string>} response The validated and transformed response for the prompt.
+     * @returns {Promise<Plan>} The created plan.
      */
     public createPlanFromResponse(
         context: TurnContext,
@@ -68,7 +70,7 @@ export class DefaultAugmentation implements Augmentation<string> {
             commands: [
                 {
                     type: 'SAY',
-                    response: response.message!.content ?? ''
+                    response: response.message
                 } as PredictedSayCommand
             ]
         });

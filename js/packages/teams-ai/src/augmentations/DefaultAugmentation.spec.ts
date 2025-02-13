@@ -1,13 +1,15 @@
 import assert from 'assert';
-import { DefaultAugmentation } from './DefaultAugmentation';
 import { TestAdapter } from 'botbuilder';
-import { TestTurnState } from '../TestTurnState';
-import { GPT3Tokenizer } from '../tokenizers';
-import { PromptResponse } from '../models';
+
+import { TestTurnState } from '../internals/testing/TestTurnState';
+import { GPTTokenizer } from '../tokenizers';
+import { PromptResponse } from '../types';
+
+import { DefaultAugmentation } from './DefaultAugmentation';
 
 describe('DefaultAugmentation', () => {
     const adapter = new TestAdapter();
-    const tokenizer = new GPT3Tokenizer();
+    const tokenizer = new GPTTokenizer();
     const valid_content = JSON.stringify({
         type: 'plan',
         commands: [
@@ -25,7 +27,10 @@ describe('DefaultAugmentation', () => {
         commands: [
             {
                 type: 'SAY',
-                response: 'hello world'
+                response: {
+                    role: 'assistant',
+                    content: 'hello world'
+                }
             }
         ]
     });
@@ -84,7 +89,7 @@ describe('DefaultAugmentation', () => {
                 // Create plan from response
                 const plan = await augmentation.createPlanFromResponse(context, state, {
                     status: 'success',
-                    message: { role: 'assistant', content: validation.value }
+                    message: { role: 'assistant', content: validation.value ?? '' }
                 });
                 assert.notEqual(plan, undefined);
                 assert.deepEqual(plan, {
@@ -92,7 +97,10 @@ describe('DefaultAugmentation', () => {
                     commands: [
                         {
                             type: 'SAY',
-                            response: ''
+                            response: {
+                                role: 'assistant',
+                                content: ''
+                            }
                         }
                     ]
                 });

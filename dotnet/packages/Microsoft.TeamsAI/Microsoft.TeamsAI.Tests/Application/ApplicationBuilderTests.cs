@@ -15,19 +15,19 @@ namespace Microsoft.Teams.AI.Tests.Application
             var app = new ApplicationBuilder<TurnState>().Build();
 
             // Assert
-            Assert.NotEqual(null, app.Options);
+            Assert.NotNull(app.Options);
             Assert.Null(app.Options.Adapter);
             Assert.Null(app.Options.BotAppId);
             Assert.Null(app.Options.Storage);
             Assert.Null(app.Options.AI);
-            Assert.NotEqual(null, app.Options.TurnStateFactory);
+            Assert.NotNull(app.Options.TurnStateFactory);
             Assert.Null(app.Options.AdaptiveCards);
             Assert.Null(app.Options.TaskModules);
             Assert.Null(app.Options.LoggerFactory);
             Assert.Null(app.Options.Authentication);
-            Assert.Equal(true, app.Options.RemoveRecipientMention);
-            Assert.Equal(true, app.Options.StartTypingTimer);
-            Assert.Equal(false, app.Options.LongRunningMessages);
+            Assert.True(app.Options.RemoveRecipientMention);
+            Assert.True(app.Options.StartTypingTimer);
+            Assert.False(app.Options.LongRunningMessages);
         }
 
         [Fact]
@@ -39,7 +39,7 @@ namespace Microsoft.Teams.AI.Tests.Application
             bool startTypingTimer = false;
             string botAppId = "testBot";
             IStorage storage = new MemoryStorage();
-            BotAdapter adapter = new SimpleAdapter();
+            SimpleAdapter adapter = new();
             TestLoggerFactory loggerFactory = new();
             Func<TurnState> turnStateFactory = () => new TurnState();
             AdaptiveCardsOptions adaptiveCards = new()
@@ -55,7 +55,7 @@ namespace Microsoft.Teams.AI.Tests.Application
                 Moderator = new TestModerator()
             };
             AuthenticationOptions<TurnState> authOptions = new();
-            authOptions.AddAuthentication("graph", new OAuthSettings());
+            authOptions.AddAuthentication("graph", new OAuthSettings() { ConnectionName = "graph-connection" });
 
             // Act
             var app = new ApplicationBuilder<TurnState>()
@@ -91,7 +91,7 @@ namespace Microsoft.Teams.AI.Tests.Application
         public void Test_ApplicationBuilder_LongRunningMessages_ExceptionThrown()
         {
             // Arrange
-            BotAdapter adapter = new SimpleAdapter();
+            SimpleAdapter adapter = new();
 
             // Act
             var func = () =>

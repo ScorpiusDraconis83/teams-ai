@@ -52,7 +52,7 @@ describe('TeamsSsoBotAuthentication', () => {
     };
 
     beforeEach(() => {
-        app = new Application({ adapter });
+        app = new Application();
         settings = {
             scopes: ['User.Read'],
             msalConfig: {
@@ -64,6 +64,8 @@ describe('TeamsSsoBotAuthentication', () => {
             },
             signInLink: 'https://localhost/auth-start.html'
         };
+
+        sinon.stub(app, 'adapter').get(() => adapter);
     });
 
     describe('constructor()', () => {
@@ -104,7 +106,13 @@ describe('TeamsSsoBotAuthentication', () => {
             const msal = new ConfidentialClientApplication(settings.msalConfig);
             new TeamsSsoBotAuthentication(app, settings, settingName, msal);
 
-            const context = new TurnContext(adapter, { type: 'invoke', name: 'signin/verifyState' });
+            const context = new TurnContext(adapter, {
+                type: 'invoke',
+                name: 'signin/verifyState',
+                value: {
+                    settingName: settingName
+                }
+            });
 
             assert(await selectors[0](context)); // The first selector is for signin/verifyState
         });
@@ -126,7 +134,7 @@ describe('TeamsSsoBotAuthentication', () => {
             const context = new TurnContext(adapter, {
                 type: 'invoke',
                 name: 'signin/tokenExchange',
-                value: { id: `00000000-0000-0000-0000-000000000000-${settingName}` }
+                value: { id: `00000000-0000-0000-0000-000000000000-${settingName}`, settingName: settingName }
             });
 
             assert(await selectors[1](context)); // The second selector is for signin/tokenExchange
@@ -232,8 +240,8 @@ describe('TeamsSsoBotAuthentication', () => {
 
             /**
              *
-             * @param msg
-             * @param expected
+             * @param {Partial<Activity>} msg - The message to check
+             * @param {string} expected - The expected message
              */
             function assertResponse(msg: Partial<Activity>, expected: string) {
                 const response = JSON.parse(msg.text!);

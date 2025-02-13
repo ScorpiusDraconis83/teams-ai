@@ -9,6 +9,7 @@
 import { TurnContext } from 'botbuilder';
 import { TurnState } from '../TurnState';
 import { AI } from '../AI';
+import { Message } from '../prompts';
 
 /**
  * A planner is responsible for generating a plan that the AI system will execute.
@@ -93,8 +94,13 @@ export interface PredictedDoCommand extends PredictedCommand {
      * Any parameters that the AI system should use to perform the action.
      */
     parameters: Record<string, any>;
-}
 
+    /**
+     * Optional. The id mapped to the name action that the AI system should perform.
+     * In OpenAI, this is associated with the action_id tool calls.
+     */
+    actionId?: string;
+}
 /**
  * A predicted SAY command is a response that the AI system should say.
  */
@@ -107,5 +113,5 @@ export interface PredictedSayCommand extends PredictedCommand {
     /**
      * The response that the AI system should say.
      */
-    response: string;
+    response: Message<string>;
 }
